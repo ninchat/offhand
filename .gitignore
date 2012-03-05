@@ -1,0 +1,4 @@
+*.py[co]
+.test/
+build/
+offhand.test
