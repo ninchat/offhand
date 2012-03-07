@@ -33,7 +33,7 @@ class CorruptedMessage(Exception):
 	def __init__(self):
 		Exception.__init__(self, "Corrupted message")
 
-class Buffer(object):
+class AsynBuffer(object):
 
 	sizelen = 4
 	sizefmt = "<I"
@@ -187,7 +187,7 @@ class AsynConnectNode(asyncore.dispatcher):
 				if self.message is not None:
 					raise UnexpectedCommand(self.command)
 
-				self.buffer = Buffer()
+				self.buffer = AsynBuffer()
 
 			elif self.command == COMMAND_COMMIT:
 				if self.message is None:
