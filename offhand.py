@@ -30,7 +30,7 @@ class UnexpectedCommand(Exception):
 
 class CorruptedMessage(Exception):
 
-	def __init__(self, command):
+	def __init__(self):
 		Exception.__init__(self, "Corrupted message")
 
 class Buffer(object):
