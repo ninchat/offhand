@@ -29,7 +29,7 @@ class Puller(offhand.AsynConnectPuller):
 		print self, node, "message", message
 		messages.remove(message)
 
-def test(done):
+def test(done, score):
 	os.chdir(".test/sockets")
 
 	with Puller() as p1, Puller() as p2:
@@ -54,14 +54,17 @@ def test(done):
 			if asyncore.socket_map:
 				asyncore.loop(timeout=t, use_poll=True, count=1)
 			elif done[0]:
-				return
+				break
 			else:
 				time.sleep(t)
 
-def main():
-	done = [False]
+	score[0] += 1
 
-	t = threading.Thread(target=test, args=(done,))
+def main():
+	done  = [False]
+	score = [0]
+
+	t = threading.Thread(target=test, args=(done, score))
 	t.daemon = True
 
 	p = subprocess.Popen(["./offhand.test", "-test.v=true"])
@@ -71,6 +74,7 @@ def main():
 		status = p.wait()
 		if status == 0:
 			print "go test exited"
+			score[0] += 1
 		else:
 			print >>sys.stderr, "go test exited with %r" % status
 
@@ -85,6 +89,11 @@ def main():
 			print >>sys.stderr, "remaining messages:"
 			for m in messages:
 				print >>sys.stderr, "  %r" % m
+		else:
+			score[0] += 1
+
+	if score[0] != 3:
+		sys.exit(1)
 
 if __name__ == "__main__":
 	try:
