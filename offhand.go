@@ -13,12 +13,14 @@ const (
 	commit_timeout   = time.Duration(60e9)
 	tick_interval    = time.Duration( 3e9)
 
-	begin_command    = byte(1)
-	commit_command   = byte(2)
-	rollback_command = byte(3)
+	begin_command    = byte(10)
+	commit_command   = byte(20)
+	rollback_command = byte(30)
 
-	begin_reply      = byte(1)
-	commit_reply     = byte(2)
+	no_reply         = byte( 0)
+	received_reply   = byte(11)
+	engaged_reply    = byte(21)
+	cancelled_reply  = byte(22)
 )
 
 type Pusher interface {
@@ -187,13 +189,13 @@ func (p *pusher) io_loop(conn net.Conn) {
 
 		var buf = make([]byte, 1)
 
-		if _, err := conn.Read(buf); err != nil || buf[0] != begin_reply {
+		if _, err := conn.Read(buf); err != nil || buf[0] != received_reply {
 			return
 		}
 
 		var command   = rollback_command
 		var commanded = true
-		var committed = false
+		var reply     = no_reply
 
 		/* critical */ func() {
 			p.lock.Lock()
@@ -213,8 +215,8 @@ func (p *pusher) io_loop(conn net.Conn) {
 
 		if command == commit_command {
 			if commanded {
-				if _, err := conn.Read(buf); err == nil && buf[0] == commit_reply {
-					committed = true
+				if _, err := conn.Read(buf); err == nil {
+					reply = buf[0]
 				}
 			}
 
@@ -224,14 +226,20 @@ func (p *pusher) io_loop(conn net.Conn) {
 
 				p.committing = false
 
-				if committed {
+				switch reply {
+				case engaged_reply:
 					p.payload = nil
 					p.committed.Broadcast()
+
+				case cancelled_reply:
+					p.begin.Signal()
 				}
 			}()
 		}
 
-		if !committed {
+		switch reply {
+		case engaged_reply, cancelled_reply:
+		default:
 			return
 		}
 	}

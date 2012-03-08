@@ -1,5 +1,6 @@
 import asyncore
 import os
+import random
 import socket
 import subprocess
 import sys
@@ -25,9 +26,13 @@ class Puller(offhand.AsynConnectPuller):
 	class Node(offhand.AsynConnectPuller.Node):
 		socket_family = socket.AF_UNIX
 
-	def handle_pull(self, node, message):
-		print self, node, "message", message
-		messages.remove(message)
+	def handle_pull(self, node, message, commit):
+		if random.randint(0, 1):
+			print self, node, "engage", message
+			commit.engage()
+			messages.remove(message)
+		else:
+			print self, node, "cancel", message
 
 def test(done, score):
 	os.chdir(".test/sockets")

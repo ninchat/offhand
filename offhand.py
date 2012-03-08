@@ -6,12 +6,13 @@ import time
 
 __all__ = ["AsynConnectPuller"]
 
-COMMAND_BEGIN    = chr(1)
-COMMAND_COMMIT   = chr(2)
-COMMAND_ROLLBACK = chr(3)
+COMMAND_BEGIN    = chr(10)
+COMMAND_COMMIT   = chr(20)
+COMMAND_ROLLBACK = chr(30)
 
-REPLY_BEGIN      = chr(1)
-REPLY_COMMIT     = chr(2)
+REPLY_RECEIVED   = chr(11)
+REPLY_ENGAGED    = chr(21)
+REPLY_CANCELLED  = chr(22)
 
 class UnexpectedEOF(Exception):
 
@@ -106,6 +107,25 @@ class AsynBuffer(object):
 
 		return message
 
+class AsynCommit(object):
+
+	def __init__(self, node):
+		self.engage  = lambda: node.engage_commit(self)
+		self.cancel  = lambda: node.cancel_commit(self)
+
+		self.closed  = False
+		self.engaged = False
+
+	def __enter__(self):
+		return self
+
+	def __exit__(self, *exc):
+		self.close()
+
+	def close(self):
+		if not self.closed:
+			self.cancel()
+
 class AsynConnectNode(asyncore.dispatcher):
 
 	socket_family = socket.AF_INET
@@ -146,10 +166,11 @@ class AsynConnectNode(asyncore.dispatcher):
 		self.command = None
 		self.buffer  = None
 		self.message = None
+		self.commit  = None
 		self.reply   = None
 
 	def readable(self):
-		return (self.command is None or self.buffer is not None)
+		return self.command is None or self.buffer is not None
 
 	def writable(self):
 		return self.reply is not None
@@ -170,6 +191,8 @@ class AsynConnectNode(asyncore.dispatcher):
 			self.handle_error()
 
 	def __read(self):
+		assert self.commit is None
+
 		if self.command is None:
 			assert self.buffer is None
 
@@ -193,7 +216,11 @@ class AsynConnectNode(asyncore.dispatcher):
 				if self.message is None:
 					raise UnexpectedCommand(self.command)
 
-				self.reply = REPLY_COMMIT
+				self.commit = AsynCommit(self)
+				self.puller.handle_pull(self, self.message, self.commit)
+
+				if self.commit:
+					return
 
 			elif self.command == COMMAND_ROLLBACK:
 				if self.message is None:
@@ -201,7 +228,7 @@ class AsynConnectNode(asyncore.dispatcher):
 
 				self.reset()
 			else:
-				raise InvalidCommand(self.command)
+				raise UnknownCommand(self.command)
 
 		if self.buffer is not None:
 			assert self.command == COMMAND_BEGIN
@@ -211,15 +238,11 @@ class AsynConnectNode(asyncore.dispatcher):
 				self.command = None
 				self.buffer  = None
 				self.message = m
-				self.reply   = REPLY_BEGIN
+				self.reply   = REPLY_RECEIVED
 
 	def __write(self):
 		if self.send(self.reply):
-			if self.reply == REPLY_COMMIT:
-				self.puller.handle_pull(self, self.message)
-				self.reset()
-			else:
-				self.reply = None
+			self.reply = None
 
 	def handle_close(self):
 		self.reset()
@@ -233,6 +256,44 @@ class AsynConnectNode(asyncore.dispatcher):
 		except socket.error as e:
 			if e.errno not in self.soft_errors:
 				raise
+
+	def engage_commit(self, commit):
+		if commit.closed:
+			if commit.engaged:
+				return
+			else:
+				raise Exception("Trying to engage cancelled commit")
+
+		assert commit is self.commit
+
+		commit.closed = True
+
+		while True:
+			# TODO: don't busy-loop
+			try:
+				if self.send(REPLY_ENGAGED):
+					break
+				else:
+					raise UnexpectedEOF()
+			except socket.error as e:
+				if e.errno != errno.EAGAIN:
+					self.handle_close()
+					raise
+			except:
+				self.handle_close()
+				raise
+
+		commit.engaged = True
+
+		self.reset()
+
+	def cancel_commit(self, commit):
+		assert commit is self.commit
+
+		commit.closed = True
+
+		self.commit = None
+		self.reply  = REPLY_CANCELLED
 
 class AsynConnectPuller(object):
 
@@ -276,7 +337,8 @@ class AsynConnectPuller(object):
 
 		self.__reset()
 
-	def handle_pull(self, node, message):
+	def handle_pull(self, node, message, commit):
+		commit.cancel()
 		assert not "handled pull event"
 
 	def handle_disconnect(self, node):
