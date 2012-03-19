@@ -12,7 +12,7 @@ COMMAND_ROLLBACK = chr(30)
 
 REPLY_RECEIVED   = chr(11)
 REPLY_ENGAGED    = chr(21)
-REPLY_CANCELLED  = chr(22)
+REPLY_CANCELED   = chr(22)
 
 class UnexpectedEOF(Exception):
 
@@ -269,7 +269,7 @@ class AsynConnectNode(asyncore.dispatcher):
 			if commit.engaged:
 				return
 			else:
-				raise Exception("Trying to engage cancelled commit")
+				raise Exception("Trying to engage canceled commit")
 
 		assert commit is self.commit
 
@@ -300,7 +300,7 @@ class AsynConnectNode(asyncore.dispatcher):
 		commit.closed = True
 
 		self.commit = None
-		self.reply  = REPLY_CANCELLED
+		self.reply  = REPLY_CANCELED
 
 class AsynConnectPuller(object):
 

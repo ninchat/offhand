@@ -20,7 +20,7 @@ const (
 	no_reply         = byte( 0)
 	received_reply   = byte(11)
 	engaged_reply    = byte(21)
-	cancelled_reply  = byte(22)
+	canceled_reply   = byte(22)
 )
 
 type Pusher interface {
@@ -231,14 +231,15 @@ func (p *pusher) io_loop(conn net.Conn) {
 					p.payload = nil
 					p.committed.Broadcast()
 
-				case cancelled_reply:
+				case canceled_reply:
 					p.begin.Signal()
 				}
 			}()
 		}
 
 		switch reply {
-		case engaged_reply, cancelled_reply:
+		case engaged_reply, canceled_reply:
+
 		default:
 			return
 		}
