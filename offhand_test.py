@@ -27,12 +27,13 @@ class Puller(offhand.AsynConnectPuller):
 		socket_family = socket.AF_UNIX
 
 	def handle_pull(self, node, message, commit):
-		if random.randint(0, 1):
-			print self, node, "engage", message
-			commit.engage()
-			messages.remove(message)
-		else:
-			print self, node, "cancel", message
+		with commit:
+			if random.randint(0, 1):
+				print self, node, "engage", message
+				commit.engage()
+				messages.remove(message)
+			else:
+				print self, node, "cancel", message
 
 def test(done, score):
 	os.chdir(".test/sockets")
