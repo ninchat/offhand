@@ -241,8 +241,15 @@ class AsynConnectNode(asyncore.dispatcher):
 				self.reply   = REPLY_RECEIVED
 
 	def __write(self):
-		if self.send(self.reply):
+		if not self.send(self.reply):
+			raise UnexpectedEOF()
+
+		if self.reply == REPLY_RECEIVED:
 			self.reply = None
+		elif self.reply == REPLY_CANCELED:
+			self.reset()
+		else:
+			assert False
 
 	def handle_close(self):
 		self.reset()
