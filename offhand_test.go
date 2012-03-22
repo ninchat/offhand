@@ -25,10 +25,15 @@ func send(t *testing.T, p Pusher, n int, message [][]byte) {
 	}
 }
 
+func close_with_stats(t *testing.T, n int, p Pusher) {
+	p.Close()
+	t.Log("pusher", n, "stats:", p.Stats().String())
+}
+
 func push(t *testing.T, exit func(), n int, message [][]byte) {
 	p := new_pusher(t, n)
 	send(t, p, n, message)
-	p.Close()
+	close_with_stats(t, n, p)
 	exit()
 }
 
@@ -39,14 +44,14 @@ func TestSequence(t *testing.T) {
 	send(t, p, 0, [][]byte{})
 	send(t, p, 0, [][]byte{ []byte{}, []byte{ 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba }, []byte{}, []byte{}, []byte{ 0xbe }, []byte{} })
 
-	p.Close()
+	close_with_stats(t, 0, p)
 
 	if p.SendMultipart([][]byte{}) == nil {
 		t.Error("send succeeded after close")
 	}
 
-	new_pusher(t, 0).Close()
-	new_pusher(t, 1).Close()
+	close_with_stats(t, 0, new_pusher(t, 0))
+	close_with_stats(t, 1, new_pusher(t, 1))
 }
 
 func TestParallel(t *testing.T) {
@@ -64,7 +69,7 @@ func TestParallel(t *testing.T) {
 	p0 := new_pusher(t, 0)
 	p1 := new_pusher(t, 1)
 	p2 := new_pusher(t, 2)
-	p2.Close()
-	p0.Close()
-	p1.Close()
+	close_with_stats(t, 2, p2)
+	close_with_stats(t, 0, p0)
+	close_with_stats(t, 1, p1)
 }

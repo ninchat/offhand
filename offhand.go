@@ -3,8 +3,10 @@ package offhand
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,9 +25,18 @@ const (
 	canceled_reply   = byte(22)
 )
 
+type Stats struct {
+	Queue    uint32
+	Send     uint32
+	Error    uint32
+	Rollback uint32
+	Cancel   uint32
+}
+
 type Pusher interface {
 	SendMultipart(message [][]byte) error
 	Close()
+	Stats() *Stats
 }
 
 type pusher struct {
@@ -40,6 +51,8 @@ type pusher struct {
 	begin      *sync.Cond
 	committing bool
 	committed  *sync.Cond
+
+	stats      Stats
 }
 
 func NewListenPusher(l net.Listener) Pusher {
@@ -106,6 +119,8 @@ func (p *pusher) send(payload [][]byte) (err error) {
 	p.committing = false
 
 	p.begin.Signal()
+
+	atomic.AddUint32(&p.stats.Queue, 1)
 
 	return
 }
@@ -178,11 +193,13 @@ func (p *pusher) io_loop(conn net.Conn) {
 		conn.SetDeadline(time.Now().Add(begin_timeout))
 
 		if _, err := conn.Write([]byte{ begin_command }); err != nil {
+			atomic.AddUint32(&p.stats.Error, 1)
 			return
 		}
 
 		for _, buf := range payload {
 			if _, err := conn.Write(buf); err != nil {
+				atomic.AddUint32(&p.stats.Error, 1)
 				return
 			}
 		}
@@ -190,6 +207,7 @@ func (p *pusher) io_loop(conn net.Conn) {
 		var buf = make([]byte, 1)
 
 		if _, err := conn.Read(buf); err != nil || buf[0] != received_reply {
+			atomic.AddUint32(&p.stats.Error, 1)
 			return
 		}
 
@@ -237,13 +255,21 @@ func (p *pusher) io_loop(conn net.Conn) {
 			}()
 
 			switch reply {
-			case engaged_reply, canceled_reply:
+			case engaged_reply:
+				atomic.AddUint32(&p.stats.Send, 1)
+
+			case canceled_reply:
+				atomic.AddUint32(&p.stats.Cancel, 1)
 
 			default:
+				atomic.AddUint32(&p.stats.Error, 1)
 				return
 			}
 		} else {
-			if !commanded {
+			if commanded {
+				atomic.AddUint32(&p.stats.Rollback, 1)
+			} else {
+				atomic.AddUint32(&p.stats.Error, 1)
 				return
 			}
 		}
@@ -254,4 +280,19 @@ func (p *pusher) io_tick() {
 	for _ = range p.ticker.C {
 		p.begin.Signal()
 	}
+}
+
+func (p *pusher) Stats() *Stats {
+	return &Stats{
+		atomic.LoadUint32(&p.stats.Queue),
+		atomic.LoadUint32(&p.stats.Send),
+		atomic.LoadUint32(&p.stats.Error),
+		atomic.LoadUint32(&p.stats.Rollback),
+		atomic.LoadUint32(&p.stats.Cancel),
+	}
+}
+
+func (s *Stats) String() string {
+	return fmt.Sprintf("queue=%v send=%v error=%v rollback=%v cancel=%v",
+		s.Queue, s.Send, s.Error, s.Rollback, s.Cancel)
 }
