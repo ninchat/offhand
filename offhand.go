@@ -235,13 +235,17 @@ func (p *pusher) io_loop(conn net.Conn) {
 					p.begin.Signal()
 				}
 			}()
-		}
 
-		switch reply {
-		case engaged_reply, canceled_reply:
+			switch reply {
+			case engaged_reply, canceled_reply:
 
-		default:
-			return
+			default:
+				return
+			}
+		} else {
+			if !commanded {
+				return
+			}
 		}
 	}
 }
