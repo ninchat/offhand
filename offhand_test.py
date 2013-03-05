@@ -64,6 +64,15 @@ def test(done, score):
 			else:
 				time.sleep(t)
 
+		count = 0.0
+
+		for p in pullers:
+			for n in p.nodes:
+				print "Node:", n.stats
+				count += 1
+
+		print "Avg:", sum((p.stats for p in pullers), offhand.Stats()) / count
+
 	score[0] += 1
 
 def main():

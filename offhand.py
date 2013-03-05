@@ -1,10 +1,11 @@
 import asyncore
 import errno
+import operator
 import socket
 import struct
 import time
 
-__all__ = ["AsynConnectPuller"]
+__all__ = ["AsynConnectPuller", "Stats"]
 
 COMMAND_BEGIN    = chr(10)
 COMMAND_COMMIT   = chr(20)
@@ -33,6 +34,41 @@ class CorruptedMessage(Exception):
 
 	def __init__(self):
 		Exception.__init__(self, "Corrupted message")
+
+class Stats(object):
+
+	__slots__ = [
+		"begin",
+		"commit",
+		"rollback",
+		"engage",
+		"cancel",
+		"error",
+		"reconnect",
+		"disconnect",
+	]
+
+	def __init__(self, copy=None):
+		for key in self.__slots__:
+			setattr(self, key, getattr(copy, key) if copy else 0)
+
+	def __str__(self):
+		return " ".join("%s=%s" % (key, getattr(self, key)) for key in self.__slots__)
+
+	def __add__(self, x):
+		return self.__operate(operator.add, lambda key: getattr(x, key))
+
+	def __sub__(self, x):
+		return self.__operate(operator.sub, lambda key: getattr(x, key))
+
+	def __div__(self, x):
+		return self.__operate(operator.div, lambda key: x)
+
+	def __operate(self, op, getter):
+		r = type(self)(self)
+		for key in self.__slots__:
+			setattr(r, key, op(getattr(self, key), getter(key)))
+		return r
 
 class AsynBuffer(object):
 
@@ -138,6 +174,7 @@ class AsynConnectNode(asyncore.dispatcher):
 
 		self.puller  = puller
 		self.address = address
+		self.stats   = Stats()
 
 		self.reset()
 
@@ -150,6 +187,8 @@ class AsynConnectNode(asyncore.dispatcher):
 		return "<Node %s>" % addr
 
 	def reconnect(self):
+		self.stats.reconnect += 1
+
 		self.create_socket(self.socket_family, self.socket_type)
 
 		try:
@@ -210,11 +249,15 @@ class AsynConnectNode(asyncore.dispatcher):
 				if self.message is not None:
 					raise UnexpectedCommand(self.command)
 
+				self.stats.begin += 1
+
 				self.buffer = AsynBuffer()
 
 			elif self.command == COMMAND_COMMIT:
 				if self.message is None:
 					raise UnexpectedCommand(self.command)
+
+				self.stats.commit += 1
 
 				self.commit = AsynCommit(self)
 				self.puller.handle_pull(self, self.message, self.commit)
@@ -225,6 +268,8 @@ class AsynConnectNode(asyncore.dispatcher):
 			elif self.command == COMMAND_ROLLBACK:
 				if self.message is None:
 					raise UnexpectedCommand(self.command)
+
+				self.stats.rollback += 1
 
 				self.reset()
 			else:
@@ -252,10 +297,17 @@ class AsynConnectNode(asyncore.dispatcher):
 			assert False
 
 	def handle_close(self):
+		self.stats.disconnect += 1
+
 		self.reset()
 		self.close()
 
 		self.puller.handle_disconnect(self)
+
+	def handle_error(self):
+		self.stats.error += 1
+
+		asyncore.dispatcher.handle_error(self)
 
 	def handle_read_event(self):
 		try:
@@ -294,6 +346,8 @@ class AsynConnectNode(asyncore.dispatcher):
 
 		self.reset()
 
+		self.stats.engage += 1
+
 	def cancel_commit(self, commit):
 		assert commit is self.commit
 
@@ -301,6 +355,8 @@ class AsynConnectNode(asyncore.dispatcher):
 
 		self.commit = None
 		self.reply  = REPLY_CANCELED
+
+		self.stats.cancel += 1
 
 class AsynConnectPuller(object):
 
@@ -324,6 +380,10 @@ class AsynConnectPuller(object):
 
 	def __exit__(self, *exc):
 		self.close()
+
+	@property
+	def stats(self):
+		return sum((n.stats for n in self.nodes), Stats())
 
 	def connect(self, *args, **kwargs):
 		node = self.Node(self, *args, **kwargs)
