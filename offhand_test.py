@@ -69,6 +69,7 @@ def test(done, score):
 		for p in pullers:
 			for n in p.nodes:
 				print "Node:", n.stats
+				assert n.stats
 				count += 1
 
 		print "Avg:", sum((p.stats for p in pullers), offhand.Stats()) / count

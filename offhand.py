@@ -52,6 +52,9 @@ class Stats(object):
 		for key in self.__slots__:
 			setattr(self, key, getattr(copy, key) if copy else 0)
 
+	def __nonzero__(self):
+		return any(getattr(self, key) for key in self.__slots__)
+
 	def __str__(self):
 		return " ".join("%s=%s" % (key, getattr(self, key)) for key in self.__slots__)
 
