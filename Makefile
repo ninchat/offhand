@@ -1,5 +1,6 @@
 GO	:= go
 PYTHON	:= python
+ANT	:= ant
 SHELL	:= bash
 
 default::
@@ -15,3 +16,4 @@ go/go.test: $(wildcard go/*.go)
 clean::
 	rm -f python/*.py[co] go/go.test
 	rm -rf python/build .sockets
+	- cd java && $(ANT) clean
