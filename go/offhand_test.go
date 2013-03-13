@@ -7,7 +7,7 @@ import (
 )
 
 func new_listener(t *testing.T, n int) (l net.Listener) {
-	l, err := net.Listen("unix", fmt.Sprintf(".test/sockets/%d", n))
+	l, err := net.Listen("unix", fmt.Sprintf(".sockets/%d", n))
 	if err != nil {
 		t.Fatalf("listen %d: %s", n, err.Error())
 	}

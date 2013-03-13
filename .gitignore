@@ -1,4 +1,4 @@
-*.py[co]
-.test/
-build/
-offhand.test
+.sockets/
+go/go.test
+python/*.py[co]
+python/build/

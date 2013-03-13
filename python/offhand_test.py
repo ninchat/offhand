@@ -36,7 +36,7 @@ class Puller(offhand.AsynConnectPuller):
 				print self, node, "cancel", message
 
 def test(done, score):
-	os.chdir(".test/sockets")
+	os.chdir(".sockets")
 
 	with Puller() as p1, Puller() as p2:
 		pullers = p1, p2
@@ -83,7 +83,7 @@ def main():
 	t = threading.Thread(target=test, args=(done, score))
 	t.daemon = True
 
-	p = subprocess.Popen(["./offhand.test", "-test.v=true"])
+	p = subprocess.Popen(["go/go.test", "-test.v=true"])
 	try:
 		t.start()
 	finally:
