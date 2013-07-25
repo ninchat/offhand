@@ -96,7 +96,7 @@ public abstract class ConnectingConsumer extends Consumer
 				peer.reconnect();
 			} catch (IOException e) {
 				log.error(peer, e);
-				reconnecting.add(peer);
+				disconnected.add(peer);
 			}
 		}
 	}
