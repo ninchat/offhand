@@ -170,7 +170,7 @@ class AsynConnectNode(asyncore.dispatcher):
 	socket_family = socket.AF_INET
 	socket_type   = socket.SOCK_STREAM
 
-	soft_errors   = errno.ECONNREFUSED, errno.ECONNRESET, errno.ENOENT
+	soft_errors = errno.ECONNREFUSED, errno.ECONNRESET, errno.ENOENT, errno.ETIMEDOUT
 
 	def __init__(self, puller, address, *args, **kwargs):
 		asyncore.dispatcher.__init__(self, *args, **kwargs)
@@ -316,7 +316,9 @@ class AsynConnectNode(asyncore.dispatcher):
 		try:
 			asyncore.dispatcher.handle_read_event(self)
 		except socket.error as e:
-			if e.errno not in self.soft_errors:
+			if e.errno in self.soft_errors:
+				self.handle_close()
+			else:
 				raise
 
 	def engage_commit(self, commit):
