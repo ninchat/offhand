@@ -201,6 +201,8 @@ class AsynConnectNode(asyncore.dispatcher):
 				self.handle_close()
 			else:
 				self.handle_error()
+		except socket.gaierror:
+			self.handle_close()
 		except:
 			self.handle_error()
 
@@ -320,6 +322,8 @@ class AsynConnectNode(asyncore.dispatcher):
 				self.handle_close()
 			else:
 				raise
+		except socket.gaierror:
+			self.handle_close()
 
 	def engage_commit(self, commit):
 		if commit.closed:
