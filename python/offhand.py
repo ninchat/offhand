@@ -196,13 +196,13 @@ class AsynConnectNode(asyncore.dispatcher):
 
 		try:
 			self.connect(self.address)
+		except socket.gaierror:
+			self.handle_close()
 		except socket.error as e:
 			if e.errno in self.soft_errors:
 				self.handle_close()
 			else:
 				self.handle_error()
-		except socket.gaierror:
-			self.handle_close()
 		except:
 			self.handle_error()
 
@@ -317,13 +317,13 @@ class AsynConnectNode(asyncore.dispatcher):
 	def handle_read_event(self):
 		try:
 			asyncore.dispatcher.handle_read_event(self)
+		except socket.gaierror:
+			self.handle_close()
 		except socket.error as e:
 			if e.errno in self.soft_errors:
 				self.handle_close()
 			else:
 				raise
-		except socket.gaierror:
-			self.handle_close()
 
 	def engage_commit(self, commit):
 		if commit.closed:
