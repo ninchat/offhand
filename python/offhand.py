@@ -375,7 +375,7 @@ class AsynConnectPuller(object):
 		self.__reset()
 
 	def __reset(self):
-		self.nodes        = []
+		self.nodes = {}
 		self.disconnected = set()
 
 	def __str__(self):
@@ -392,12 +392,20 @@ class AsynConnectPuller(object):
 
 	@property
 	def stats(self):
-		return sum((n.stats for n in self.nodes), Stats())
+		return sum((n.stats for n in self.nodes.itervalues()), Stats())
 
-	def connect(self, *args, **kwargs):
-		node = self.Node(self, *args, **kwargs)
-		self.nodes.append(node)
+	def connect(self, address, *args, **kwargs):
+		assert address not in self.nodes
+		node = self.Node(self, address, *args, **kwargs)
+		self.nodes[address] = node
 		node.reconnect()
+
+	def disconnect(self, address):
+		node = self.nodes.pop(address)
+		try:
+			self.disconnected.remove(node)
+		except KeyError:
+			node.close()
 
 	def reconnect(self):
 		reconnecting = self.disconnected
@@ -407,7 +415,7 @@ class AsynConnectPuller(object):
 			node.reconnect()
 
 	def close(self):
-		for node in self.nodes:
+		for node in self.nodes.itervalues():
 			if node not in self.disconnected:
 				node.close()
 

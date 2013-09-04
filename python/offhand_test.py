@@ -49,6 +49,11 @@ def test(done, score):
 		last_time = time.time()
 
 		while True:
+			if str(1) in p.nodes:
+				p.disconnect(str(1))
+			else:
+				p.connect(str(1))
+
 			t = timeout - (time.time() - last_time)
 			if t <= 0:
 				for p in pullers:
@@ -67,7 +72,7 @@ def test(done, score):
 		count = 0.0
 
 		for p in pullers:
-			for n in p.nodes:
+			for n in p.nodes.itervalues():
 				print "Node:", n.stats
 				assert n.stats
 				count += 1
