@@ -10,7 +10,7 @@ const (
 	tick_interval    = time.Duration( 3e9)
 
 	begin_command    = byte(10)
-	commit_command   = byte(20)
+	commit_command   = byte(21)
 	rollback_command = byte(30)
 
 	no_reply         = byte( 0)

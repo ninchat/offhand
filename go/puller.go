@@ -7,8 +7,9 @@ import (
 )
 
 type Commit struct {
-	Message [][]byte
-	reply   chan byte
+	Message   [][]byte
+	StartTime time.Time
+	reply     chan byte
 }
 
 type Puller interface {
@@ -73,6 +74,13 @@ func (p *puller) loop(addr string) {
 				break
 			}
 
+			var latency uint32
+			if binary.Read(conn, binary.LittleEndian, &latency) != nil {
+				break
+			}
+
+			start_time := time.Now().Add(time.Duration(latency) * -1000)
+
 			message := make([][]byte, 0)
 
 			for len(payload) >= 4 {
@@ -90,8 +98,9 @@ func (p *puller) loop(addr string) {
 			commit_channel := make(chan byte)
 
 			p.recv<- &Commit{
-				Message: message,
-				reply:   commit_channel,
+				Message:   message,
+				StartTime: start_time,
+				reply:     commit_channel,
 			}
 
 			bytecode[0] = <-commit_channel

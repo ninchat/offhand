@@ -19,7 +19,7 @@ type Stats struct {
 }
 
 type Pusher interface {
-	SendMultipart(message [][]byte) error
+	SendMultipart(message [][]byte, message_time time.Time) error
 	Close()
 	Stats() *Stats
 }
@@ -33,6 +33,7 @@ type pusher struct {
 	lock       sync.Mutex
 	generation uint32
 	payload    [][]byte
+	start_time time.Time
 	begin      *sync.Cond
 	committing bool
 	committed  *sync.Cond
@@ -55,7 +56,7 @@ func NewListenPusher(l net.Listener) Pusher {
 	return p
 }
 
-func (p *pusher) SendMultipart(message [][]byte) error {
+func (p *pusher) SendMultipart(message [][]byte, message_time time.Time) error {
 	var message_size uint64
 	var message_data = make([][]byte, 1 + len(message) * 2)
 
@@ -79,10 +80,10 @@ func (p *pusher) SendMultipart(message [][]byte) error {
 
 	message_data[0] = message_head
 
-	return p.send(message_data)
+	return p.send(message_data, message_time)
 }
 
-func (p *pusher) send(payload [][]byte) (err error) {
+func (p *pusher) send(payload [][]byte, start_time time.Time) (err error) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
@@ -101,6 +102,7 @@ func (p *pusher) send(payload [][]byte) (err error) {
 
 	p.generation++
 	p.payload    = payload
+	p.start_time = start_time
 	p.committing = false
 
 	p.begin.Signal()
@@ -196,9 +198,7 @@ func (p *pusher) io_loop(conn net.Conn) {
 			return
 		}
 
-		var command   = rollback_command
-		var commanded = true
-		var reply     = no_reply
+		commit := false
 
 		/* critical */ func() {
 			p.lock.Lock()
@@ -206,17 +206,30 @@ func (p *pusher) io_loop(conn net.Conn) {
 
 			if p.generation == generation && p.payload != nil && !p.committing {
 				p.committing = true
-				command = commit_command
+				commit = true
 			}
 		}()
 
 		conn.SetDeadline(time.Now().Add(commit_timeout))
 
-		if _, err := conn.Write([]byte{ command }); err != nil {
-			commanded = false
+		commanded := false
+
+		if commit {
+			if _, err := conn.Write([]byte{ commit_command }); err == nil {
+				latency := uint32(time.Now().Sub(p.start_time).Nanoseconds() / 1000)
+				if binary.Write(conn, binary.LittleEndian, &latency) == nil {
+					commanded = true
+				}
+			}
+		} else {
+			if _, err := conn.Write([]byte{ rollback_command }); err == nil {
+				commanded = true
+			}
 		}
 
-		if command == commit_command {
+		reply := no_reply
+
+		if commit {
 			if commanded {
 				if _, err := conn.Read(buf); err == nil {
 					reply = buf[0]

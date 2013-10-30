@@ -8,7 +8,8 @@ import time
 __all__ = ["AsynConnectPuller", "Stats"]
 
 COMMAND_BEGIN    = chr(10)
-COMMAND_COMMIT   = chr(20)
+COMMAND_OLDCOMMIT= chr(20)
+COMMAND_COMMIT   = chr(21)
 COMMAND_ROLLBACK = chr(30)
 
 REPLY_RECEIVED   = chr(11)
@@ -146,6 +147,27 @@ class AsynBuffer(object):
 
 		return message
 
+class AsynValueBuffer(object):
+
+	valuelen = 4
+	valuefmt = "<I"
+
+	def __init__(self):
+		self.buf = ""
+
+	def receive(self, s):
+		b = s.recv(self.valuelen - len(self.buf))
+		if not b:
+			raise UnexpectedEOF()
+
+		self.buf += b
+
+		if len(self.buf) < self.valuelen:
+			return None
+
+		value, = struct.unpack(self.valuefmt, self.buf)
+		return value
+
 class AsynCommit(object):
 
 	def __init__(self, node):
@@ -238,8 +260,6 @@ class AsynConnectNode(asyncore.dispatcher):
 		assert self.commit is None
 
 		if self.command is None:
-			assert self.buffer is None
-
 			b = self.recv(1)
 			if not b:
 				if self.message is None:
@@ -251,6 +271,8 @@ class AsynConnectNode(asyncore.dispatcher):
 			self.command = b[0]
 
 			if self.command == COMMAND_BEGIN:
+				assert self.buffer is None
+
 				if self.message is not None:
 					raise UnexpectedCommand(self.command)
 
@@ -258,19 +280,44 @@ class AsynConnectNode(asyncore.dispatcher):
 
 				self.buffer = AsynBuffer()
 
-			elif self.command == COMMAND_COMMIT:
+			elif self.command == COMMAND_OLDCOMMIT:
+				assert self.buffer is None
+
 				if self.message is None:
 					raise UnexpectedCommand(self.command)
 
 				self.stats.commit += 1
 
 				self.commit = AsynCommit(self)
-				self.puller.handle_pull(self, self.message, self.commit)
+				self.puller.handle_pull(self, self.message, time.time(), self.commit)
+
+				if self.commit:
+					return
+
+			elif self.command == COMMAND_COMMIT:
+				if self.message is None:
+					raise UnexpectedCommand(self.command)
+
+				if self.buffer is None:
+					self.buffer = AsynValueBuffer()
+
+				latency = self.buffer.receive(self)
+				if latency is None:
+					return
+
+				start_time = time.time() - latency / 1000000.0
+
+				self.stats.commit += 1
+
+				self.commit = AsynCommit(self)
+				self.puller.handle_pull(self, self.message, start_time, self.commit)
 
 				if self.commit:
 					return
 
 			elif self.command == COMMAND_ROLLBACK:
+				assert self.buffer is None
+
 				if self.message is None:
 					raise UnexpectedCommand(self.command)
 
@@ -421,7 +468,7 @@ class AsynConnectPuller(object):
 
 		self.__reset()
 
-	def handle_pull(self, node, message, commit):
+	def handle_pull(self, node, message, start_time, commit):
 		commit.cancel()
 		assert not "handled pull event"
 
