@@ -1,80 +1,26 @@
+from __future__ import absolute_import
+
+__all__ = [
+	"ConnectPuller",
+]
+
 import asyncore
 import errno
-import operator
 import socket
 import struct
 import time
 
-__all__ = ["AsynConnectPuller", "Stats"]
+from . import (
+	CorruptedMessage,
+	Stats,
+	UnexpectedCommand,
+	UnexpectedEOF,
+	UnknownCommand,
+)
 
-COMMAND_BEGIN    = chr(10)
-COMMAND_OLDCOMMIT= chr(20)
-COMMAND_COMMIT   = chr(21)
-COMMAND_ROLLBACK = chr(30)
+from .protocol import *
 
-REPLY_RECEIVED   = chr(11)
-REPLY_ENGAGED    = chr(21)
-REPLY_CANCELED   = chr(22)
-
-class UnexpectedEOF(Exception):
-
-	def __init__(self):
-		Exception.__init__(self, "Connection closed unexpectedly")
-
-class UnknownCommand(Exception):
-
-	def __init__(self, command):
-		Exception.__init__(self, "Unknown command: %d" % ord(command))
-
-class UnexpectedCommand(Exception):
-
-	def __init__(self, command):
-		Exception.__init__(self, "Unexpected command: %d" % ord(command))
-
-class CorruptedMessage(Exception):
-
-	def __init__(self):
-		Exception.__init__(self, "Corrupted message")
-
-class Stats(object):
-
-	__slots__ = [
-		"begin",
-		"commit",
-		"rollback",
-		"engage",
-		"cancel",
-		"error",
-		"reconnect",
-		"disconnect",
-	]
-
-	def __init__(self, copy=None):
-		for key in self.__slots__:
-			setattr(self, key, getattr(copy, key) if copy else 0)
-
-	def __nonzero__(self):
-		return any(getattr(self, key) for key in self.__slots__)
-
-	def __str__(self):
-		return " ".join("%s=%s" % (key, getattr(self, key)) for key in self.__slots__)
-
-	def __add__(self, x):
-		return self.__operate(operator.add, lambda key: getattr(x, key))
-
-	def __sub__(self, x):
-		return self.__operate(operator.sub, lambda key: getattr(x, key))
-
-	def __div__(self, x):
-		return self.__operate(operator.div, lambda key: x)
-
-	def __operate(self, op, getter):
-		r = type(self)(self)
-		for key in self.__slots__:
-			setattr(r, key, op(getattr(self, key), getter(key)))
-		return r
-
-class AsynBuffer(object):
+class Buffer(object):
 
 	sizelen = 4
 	sizefmt = "<I"
@@ -147,7 +93,7 @@ class AsynBuffer(object):
 
 		return message
 
-class AsynValueBuffer(object):
+class ValueBuffer(object):
 
 	valuelen = 4
 	valuefmt = "<I"
@@ -168,7 +114,7 @@ class AsynValueBuffer(object):
 		value, = struct.unpack(self.valuefmt, self.buf)
 		return value
 
-class AsynCommit(object):
+class Commit(object):
 
 	def __init__(self, node):
 		self.engage  = lambda: node.engage_commit(self)
@@ -187,7 +133,7 @@ class AsynCommit(object):
 		if not self.closed:
 			self.cancel()
 
-class AsynConnectNode(asyncore.dispatcher):
+class ConnectNode(asyncore.dispatcher):
 
 	socket_family = socket.AF_INET
 	socket_type   = socket.SOCK_STREAM
@@ -278,7 +224,7 @@ class AsynConnectNode(asyncore.dispatcher):
 
 				self.stats.begin += 1
 
-				self.buffer = AsynBuffer()
+				self.buffer = Buffer()
 
 			elif self.command == COMMAND_OLDCOMMIT:
 				assert self.buffer is None
@@ -288,7 +234,7 @@ class AsynConnectNode(asyncore.dispatcher):
 
 				self.stats.commit += 1
 
-				self.commit = AsynCommit(self)
+				self.commit = Commit(self)
 				self.puller.handle_pull(self, self.message, time.time(), self.commit)
 
 				if self.commit:
@@ -299,7 +245,7 @@ class AsynConnectNode(asyncore.dispatcher):
 					raise UnexpectedCommand(self.command)
 
 				if self.buffer is None:
-					self.buffer = AsynValueBuffer()
+					self.buffer = ValueBuffer()
 
 				latency = self.buffer.receive(self)
 				if latency is None:
@@ -309,7 +255,7 @@ class AsynConnectNode(asyncore.dispatcher):
 
 				self.stats.commit += 1
 
-				self.commit = AsynCommit(self)
+				self.commit = Commit(self)
 				self.puller.handle_pull(self, self.message, start_time, self.commit)
 
 				if self.commit:
@@ -414,9 +360,9 @@ class AsynConnectNode(asyncore.dispatcher):
 
 		self.stats.cancel += 1
 
-class AsynConnectPuller(object):
+class ConnectPuller(object):
 
-	Node = AsynConnectNode
+	Node = ConnectNode
 
 	def __init__(self):
 		self.__reset()

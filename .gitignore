@@ -1,5 +1,5 @@
+*.py[co]
 .sockets/
 go/go.test
 java/build/
-python/*.py[co]
 python/build/

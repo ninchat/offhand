@@ -8,6 +8,7 @@ import threading
 import time
 
 import offhand
+import offhand.asyn
 
 messages = [
 	# TestSequence
@@ -21,12 +22,12 @@ messages = [
 	["", "\xcc\xcc\xcc\xbb\xbb\xbb\xaa", "", "", "\xaa", ""],
 ]
 
-class Puller(offhand.AsynConnectPuller):
+class Puller(offhand.asyn.ConnectPuller):
 
-	class Node(offhand.AsynConnectPuller.Node):
+	class Node(offhand.asyn.ConnectPuller.Node):
 		socket_family = socket.AF_UNIX
 
-	def handle_pull(self, node, message, commit):
+	def handle_pull(self, node, message, start_time, commit):
 		with commit:
 			if random.randint(0, 1):
 				print self, node, "engage", message

@@ -8,7 +8,7 @@ default::
 check:: go/go.test
 	@ rm -rf .sockets
 	@ mkdir -p .sockets
-	$(PYTHON) python/offhand_test.py
+	$(PYTHON) python/asyn_test.py
 
 go/go.test: $(wildcard go/*.go)
 	cd go && $(GO) test -c
