@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"testing"
+	"time"
 )
 
 func new_listener(t *testing.T, n int) (l net.Listener) {
@@ -19,7 +20,7 @@ func new_pusher(t *testing.T, n int) Pusher {
 }
 
 func send(t *testing.T, p Pusher, n int, message [][]byte) {
-	err := p.SendMultipart(message)
+	err := p.SendMultipart(message, time.Now())
 	if err != nil {
 		t.Errorf("send %d: %s", n, err.Error())
 	}
@@ -46,7 +47,7 @@ func TestSequence(t *testing.T) {
 
 	close_with_stats(t, 0, p)
 
-	if p.SendMultipart([][]byte{}) == nil {
+	if p.SendMultipart([][]byte{}, time.Now()) == nil {
 		t.Error("send succeeded after close")
 	}
 
