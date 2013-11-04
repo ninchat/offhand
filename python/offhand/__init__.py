@@ -4,9 +4,14 @@ __all__ = [
 	"UnexpectedCommand",
 	"UnexpectedEOF",
 	"UnknownCommand",
+	"log",
 ]
 
+import logging
 import operator
+import struct
+
+log = logging.getLogger("offhand")
 
 class UnexpectedEOF(Exception):
 
@@ -65,3 +70,26 @@ class Stats(object):
 		for key in self.__slots__:
 			setattr(r, key, op(getattr(self, key), getter(key)))
 		return r
+
+def parse_message(data):
+	message = []
+	offset = 0
+
+	while True:
+		remain = len(data) - offset
+		if remain == 0:
+			break
+
+		if remain < 4:
+			raise CorruptedMessage()
+
+		part_size, = struct.unpack(b"<I", data[offset : offset+4])
+		offset += 4
+
+		if remain < 4 + part_size:
+			raise CorruptedMessage()
+
+		message.append(data[offset : offset+part_size])
+		offset += part_size
+
+	return message

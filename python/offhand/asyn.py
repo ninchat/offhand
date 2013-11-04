@@ -16,14 +16,12 @@ from . import (
 	UnexpectedCommand,
 	UnexpectedEOF,
 	UnknownCommand,
+	parse_message,
 )
 
 from .protocol import *
 
 class Buffer(object):
-
-	sizelen = 4
-	sizefmt = "<I"
 
 	def __init__(self):
 		self.sizebuf = ""
@@ -37,25 +35,25 @@ class Buffer(object):
 			raise UnexpectedEOF()
 
 		if r == 2:
-			return self.__message()
+			return parse_message(self.data)
 
 		return None
 
 	def __receive(self, s):
 		r = 0
 
-		if len(self.sizebuf) < self.sizelen:
-			b = s.recv(self.sizelen - len(self.sizebuf))
+		if len(self.sizebuf) < 4:
+			b = s.recv(4 - len(self.sizebuf))
 			if not b:
 				return r
 
 			self.sizebuf += b
 			r = 1
 
-			if len(self.sizebuf) < self.sizelen:
+			if len(self.sizebuf) < 4:
 				return r
 
-			self.size, = struct.unpack(self.sizefmt, self.sizebuf)
+			self.size, = struct.unpack(b"<I", self.sizebuf)
 
 		if len(self.data) < self.size:
 			b = s.recv(self.size - len(self.data))
@@ -69,29 +67,6 @@ class Buffer(object):
 				return r
 
 		return 2
-
-	def __message(self):
-		message = []
-		offset  = 0
-
-		while True:
-			remain = self.size - offset
-			if remain == 0:
-				break
-
-			if remain < self.sizelen:
-				raise CorruptedMessage()
-
-			part_size, = struct.unpack(self.sizefmt, self.data[offset:offset+self.sizelen])
-			offset += self.sizelen
-
-			if remain < self.sizelen + part_size:
-				raise CorruptedMessage()
-
-			message.append(self.data[offset:offset+part_size])
-			offset += part_size
-
-		return message
 
 class ValueBuffer(object):
 
