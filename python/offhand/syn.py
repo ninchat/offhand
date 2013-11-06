@@ -134,6 +134,8 @@ def connect_pull(handler, address, connection_type=Connection):
 		delay = False
 
 		while True:
+			conn.close()
+
 			if delay:
 				time.sleep(1)
 
@@ -157,7 +159,9 @@ def connect_pull(handler, address, connection_type=Connection):
 				elif command == COMMAND_COMMIT:
 					latency, = struct.unpack(b"<I", conn.recv(4))
 					start_time = time.time() - latency / 1000000.0
-				elif command != COMMAND_ROLLBACK:
+				elif command == COMMAND_ROLLBACK:
+					continue
+				else:
 					raise UnexpectedCommand(command)
 
 				engaged = handler(parse_message(data), start_time)
@@ -167,5 +171,3 @@ def connect_pull(handler, address, connection_type=Connection):
 				pass
 			except (CorruptedMessage, UnexpectedCommand) as e:
 				log.error("%s: %s", conn, e)
-
-			conn.close()
