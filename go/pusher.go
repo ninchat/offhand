@@ -26,6 +26,7 @@ type Pusher interface {
 
 type pusher struct {
 	listener   net.Listener
+	logger     func(error)
 	ticker     *time.Ticker
 	closing    bool
 	closed     bool
@@ -41,9 +42,10 @@ type pusher struct {
 	stats      Stats
 }
 
-func NewListenPusher(l net.Listener) Pusher {
+func NewListenPusher(l net.Listener, logger func(error)) Pusher {
 	p := &pusher{
 		listener: l,
+		logger:   logger,
 		ticker:   time.NewTicker(tick_interval),
 	}
 
@@ -180,12 +182,14 @@ func (p *pusher) io_loop(conn net.Conn) {
 		conn.SetDeadline(time.Now().Add(begin_timeout))
 
 		if _, err := conn.Write([]byte{ begin_command }); err != nil {
+			p.log(err)
 			atomic.AddUint32(&p.stats.Error, 1)
 			return
 		}
 
 		for _, buf := range payload {
 			if _, err := conn.Write(buf); err != nil {
+				p.log(err)
 				atomic.AddUint32(&p.stats.Error, 1)
 				return
 			}
@@ -193,7 +197,12 @@ func (p *pusher) io_loop(conn net.Conn) {
 
 		var buf = make([]byte, 1)
 
-		if _, err := conn.Read(buf); err != nil || buf[0] != received_reply {
+		_, err := conn.Read(buf)
+		if err == nil && buf[0] != received_reply {
+			err = errors.New("bad reply to begin command")
+		}
+		if err != nil {
+			p.log(err)
 			atomic.AddUint32(&p.stats.Error, 1)
 			return
 		}
@@ -215,14 +224,18 @@ func (p *pusher) io_loop(conn net.Conn) {
 		commanded := false
 
 		if commit {
-			if _, err := conn.Write([]byte{ commit_command }); err == nil {
+			if _, err := conn.Write([]byte{ commit_command }); err != nil {
+				p.log(err)
+			} else {
 				latency := uint32(time.Now().Sub(p.start_time).Nanoseconds() / 1000)
 				if binary.Write(conn, binary.LittleEndian, &latency) == nil {
 					commanded = true
 				}
 			}
 		} else {
-			if _, err := conn.Write([]byte{ rollback_command }); err == nil {
+			if _, err := conn.Write([]byte{ rollback_command }); err != nil {
+				p.log(err)
+			} else {
 				commanded = true
 			}
 		}
@@ -230,8 +243,11 @@ func (p *pusher) io_loop(conn net.Conn) {
 		reply := no_reply
 
 		if commit {
+			var err error
+
 			if commanded {
-				if _, err := conn.Read(buf); err == nil {
+				_, err = conn.Read(buf)
+				if err == nil {
 					reply = buf[0]
 				}
 			}
@@ -260,6 +276,11 @@ func (p *pusher) io_loop(conn net.Conn) {
 				atomic.AddUint32(&p.stats.Cancel, 1)
 
 			default:
+				if err == nil {
+					err = errors.New("bad reply to commit command")
+				}
+
+				p.log(err)
 				atomic.AddUint32(&p.stats.Error, 1)
 				return
 			}
@@ -271,6 +292,12 @@ func (p *pusher) io_loop(conn net.Conn) {
 				return
 			}
 		}
+	}
+}
+
+func (p *pusher) log(err error) {
+	if p.logger != nil {
+		p.logger(err)
 	}
 }
 
