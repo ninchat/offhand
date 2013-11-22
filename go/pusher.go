@@ -25,8 +25,6 @@ type Pusher interface {
 }
 
 type pusher struct {
-	oldproto   bool
-
 	listener   net.Listener
 	ticker     *time.Ticker
 	closing    bool
@@ -44,16 +42,7 @@ type pusher struct {
 }
 
 func NewListenPusher(l net.Listener) Pusher {
-	return new_listen_pusher(false, l)
-}
-
-func NewListenPusherWithOldProtocol(l net.Listener) Pusher {
-	return new_listen_pusher(true, l)
-}
-
-func new_listen_pusher(oldproto bool, l net.Listener) Pusher {
 	p := &pusher{
-		oldproto: oldproto,
 		listener: l,
 		ticker:   time.NewTicker(tick_interval),
 	}
@@ -226,16 +215,10 @@ func (p *pusher) io_loop(conn net.Conn) {
 		commanded := false
 
 		if commit {
-			if p.oldproto {
-				if _, err := conn.Write([]byte{ oldcommit_command }); err == nil {
+			if _, err := conn.Write([]byte{ commit_command }); err == nil {
+				latency := uint32(time.Now().Sub(p.start_time).Nanoseconds() / 1000)
+				if binary.Write(conn, binary.LittleEndian, &latency) == nil {
 					commanded = true
-				}
-			} else {
-				if _, err := conn.Write([]byte{ commit_command }); err == nil {
-					latency := uint32(time.Now().Sub(p.start_time).Nanoseconds() / 1000)
-					if binary.Write(conn, binary.LittleEndian, &latency) == nil {
-						commanded = true
-					}
 				}
 			}
 		} else {
