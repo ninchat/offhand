@@ -144,29 +144,30 @@ def connect_pull(handler, address, connection_type=Connection):
 			try:
 				conn.connect()
 
-				command, = conn.recv(1, eof_ok=True)
-				if command != COMMAND_BEGIN:
-					raise UnexpectedCommand(command)
+				while True:
+					command, = conn.recv(1, eof_ok=True)
+					if command != COMMAND_BEGIN:
+						raise UnexpectedCommand(command)
 
-				size, = struct.unpack(b"<I", conn.recv(4))
-				data = conn.recv(size)
+					size, = struct.unpack(b"<I", conn.recv(4))
+					data = conn.recv(size)
 
-				conn.send(REPLY_RECEIVED)
+					conn.send(REPLY_RECEIVED)
 
-				command, = conn.recv(1)
-				if command == COMMAND_OLDCOMMIT:
-					start_time = time.time()
-				elif command == COMMAND_COMMIT:
-					latency, = struct.unpack(b"<I", conn.recv(4))
-					start_time = time.time() - latency / 1000000.0
-				elif command == COMMAND_ROLLBACK:
-					continue
-				else:
-					raise UnexpectedCommand(command)
+					command, = conn.recv(1)
+					if command == COMMAND_OLDCOMMIT:
+						start_time = time.time()
+					elif command == COMMAND_COMMIT:
+						latency, = struct.unpack(b"<I", conn.recv(4))
+						start_time = time.time() - latency / 1000000.0
+					elif command == COMMAND_ROLLBACK:
+						continue
+					else:
+						raise UnexpectedCommand(command)
 
-				engaged = handler(parse_message(data), start_time)
+					engaged = handler(parse_message(data), start_time)
 
-				conn.send(REPLY_ENGAGED if engaged else REPLY_CANCELED)
+					conn.send(REPLY_ENGAGED if engaged else REPLY_CANCELED)
 			except Reconnect:
 				pass
 			except (CorruptedMessage, UnexpectedCommand) as e:
