@@ -26,6 +26,7 @@ class Reconnect(Exception):
 class Connection(object):
 	socket_family = socket.AF_INET
 	socket_type = socket.SOCK_STREAM
+	timeout = 34
 
 	soft_connect_errors = (
 		errno.ECONNREFUSED,
@@ -69,6 +70,7 @@ class Connection(object):
 
 		try:
 			sock = self.socket()
+			sock.settimeout(self.timeout)
 			sock.connect(self.address)
 			ok = True
 		except socket.error as e:
@@ -97,14 +99,14 @@ class Connection(object):
 			except socket.error as e:
 				if e.errno == errno.EAGAIN:
 					continue
-				log.exception("%s: send", self)
+				log.error("%s: send: %s", self, e)
 			except Exception:
 				log.exception("%s: send", self)
 
 			if not ok:
 				raise Reconnect()
 
-	def recv(self, size, eof_ok=False):
+	def recv(self, size, initial=False):
 		data = b""
 
 		while len(data) < size:
@@ -112,17 +114,20 @@ class Connection(object):
 
 			try:
 				buf = self.sock.recv(size - len(data))
+			except socket.timeout as e:
+				if not initial:
+					log.error("%s: recv: %s", self, e)
 			except socket.error as e:
 				if e.errno == errno.EAGAIN:
 					continue
-				log.exception("%s: recv", self)
+				log.error("%s: recv: %s", self, e)
 			except Exception:
 				log.exception("%s: recv", self)
-
-			if not buf:
-				if not eof_ok or data:
+			else:
+				if not buf and (not initial or data):
 					log.error("%s: unexpected EOF", self)
 
+			if not buf:
 				raise Reconnect()
 
 			data += buf
@@ -145,7 +150,7 @@ def connect_pull(handler, address, connection_type=Connection):
 				conn.connect()
 
 				while True:
-					command, = conn.recv(1, eof_ok=True)
+					command, = conn.recv(1, initial=True)
 					if command != COMMAND_BEGIN:
 						raise UnexpectedCommand(command)
 
