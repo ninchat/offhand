@@ -4,9 +4,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -182,15 +184,13 @@ func (p *pusher) io_loop(conn net.Conn) {
 		conn.SetDeadline(time.Now().Add(begin_timeout))
 
 		if _, err := conn.Write([]byte{ begin_command }); err != nil {
-			p.log(err)
-			atomic.AddUint32(&p.stats.Error, 1)
+			p.initial_error(err)
 			return
 		}
 
 		for _, buf := range payload {
 			if _, err := conn.Write(buf); err != nil {
-				p.log(err)
-				atomic.AddUint32(&p.stats.Error, 1)
+				p.initial_error(err)
 				return
 			}
 		}
@@ -202,8 +202,7 @@ func (p *pusher) io_loop(conn net.Conn) {
 			err = errors.New("bad reply to begin command")
 		}
 		if err != nil {
-			p.log(err)
-			atomic.AddUint32(&p.stats.Error, 1)
+			p.initial_error(err)
 			return
 		}
 
@@ -292,6 +291,21 @@ func (p *pusher) io_loop(conn net.Conn) {
 				return
 			}
 		}
+	}
+}
+
+func (p *pusher) initial_error(err error) {
+	soft := false
+
+	if err == io.EOF {
+		soft = true
+	} else if operr, ok := err.(*net.OpError); ok && operr.Err == syscall.EPIPE {
+		soft = true
+	}
+
+	if !soft {
+		p.log(err)
+		atomic.AddUint32(&p.stats.Error, 1)
 	}
 }
 
