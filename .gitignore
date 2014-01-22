@@ -1,5 +1,2 @@
-*.py[co]
-.sockets/
-go/go.test
-java/build/
-python/build/
+/c/test
+/go/test
