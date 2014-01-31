@@ -151,7 +151,9 @@ def connect_pull(handler, address, connection_type=Connection):
 
 				while True:
 					command, = conn.recv(1, initial=True)
-					if command != COMMAND_BEGIN:
+					if command == COMMAND_KEEPALIVE:
+						conn.send(REPLY_KEEPALIVE)
+					elif command != COMMAND_BEGIN:
 						raise UnexpectedCommand(command)
 
 					size, = struct.unpack(b"<I", conn.recv(4))
