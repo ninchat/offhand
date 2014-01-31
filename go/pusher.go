@@ -230,15 +230,12 @@ func (p *pusher) send_item(conn net.Conn, item *item) (ok bool) {
 
 	switch reply {
 	case engaged_reply:
-		item.payload = nil
-		unsent := atomic.AddInt32(&p.unsent, -1)
 		atomic.AddUint32(&p.stats.Send, 1)
+		item.payload = nil
 		ok = true
 
-		if unsent == 0 {
-			p.mutex.Lock()
+		if atomic.AddInt32(&p.unsent, -1) == 0 {
 			p.flush.Broadcast()
-			p.mutex.Unlock()
 		}
 
 	case canceled_reply:
