@@ -21,7 +21,9 @@ from . import (
 from .protocol import *
 
 class Reconnect(Exception):
-	pass
+
+	def __init__(self, timedout):
+		self.timedout = timedout
 
 class Connection(object):
 	socket_family = socket.AF_INET
@@ -67,6 +69,7 @@ class Connection(object):
 
 		sock = None
 		ok = False
+		timedout = False
 
 		try:
 			sock = self.socket()
@@ -76,6 +79,7 @@ class Connection(object):
 		except socket.error as e:
 			if e.errno not in self.soft_connect_errors:
 				log.exception("%s: connect", self)
+			timedout = (e.errno == errno.ETIMEDOUT)
 		except Exception:
 			log.exception("%s: connect", self)
 
@@ -85,13 +89,14 @@ class Connection(object):
 			if sock:
 				sock.close()
 
-			raise Reconnect()
+			raise Reconnect(timedout)
 
 	def send(self, data):
 		n = 0
 
 		while n < len(data):
 			ok = False
+			timedout = False
 
 			try:
 				n += self.sock.send(data[n:])
@@ -100,27 +105,31 @@ class Connection(object):
 				if e.errno == errno.EAGAIN:
 					continue
 				log.error("%s: send: %s", self, e)
+				timedout = (e.errno == errno.ETIMEDOUT)
 			except Exception:
 				log.exception("%s: send", self)
 
 			if not ok:
-				raise Reconnect()
+				raise Reconnect(timedout)
 
 	def recv(self, size, initial=False):
 		data = b""
 
 		while len(data) < size:
 			buf = None
+			timedout = False
 
 			try:
 				buf = self.sock.recv(size - len(data))
 			except socket.timeout as e:
 				if not initial:
 					log.error("%s: recv: %s", self, e)
+				timedout = True
 			except socket.error as e:
 				if e.errno == errno.EAGAIN:
 					continue
 				log.error("%s: recv: %s", self, e)
+				timedout = (e.errno == errno.ETIMEDOUT)
 			except Exception:
 				log.exception("%s: recv", self)
 			else:
@@ -128,7 +137,7 @@ class Connection(object):
 					log.error("%s: unexpected EOF", self)
 
 			if not buf:
-				raise Reconnect()
+				raise Reconnect(timedout)
 
 			data += buf
 
@@ -176,7 +185,8 @@ def connect_pull(handler, address, connection_type=Connection):
 					engaged = handler(parse_message(data), start_time)
 
 					conn.send(REPLY_ENGAGED if engaged else REPLY_CANCELED)
-			except Reconnect:
-				pass
+			except Reconnect as e:
+				if e.timedout:
+					delay = False
 			except (CorruptedMessage, UnexpectedCommand) as e:
 				log.error("%s: %s", conn, e)
