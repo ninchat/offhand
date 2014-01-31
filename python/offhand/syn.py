@@ -153,6 +153,7 @@ def connect_pull(handler, address, connection_type=Connection):
 					command, = conn.recv(1, initial=True)
 					if command == COMMAND_KEEPALIVE:
 						conn.send(REPLY_KEEPALIVE)
+						continue
 					elif command != COMMAND_BEGIN:
 						raise UnexpectedCommand(command)
 
