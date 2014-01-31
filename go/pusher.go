@@ -12,6 +12,10 @@ import (
 	"time"
 )
 
+const (
+	pusher_queue_length = 100
+)
+
 type Stats struct {
 	Queue    uint32
 	Send     uint32
@@ -26,111 +30,83 @@ type Pusher interface {
 	Stats() *Stats
 }
 
-type pusher struct {
-	listener   net.Listener
-	logger     func(error)
-	ticker     *time.Ticker
-	closing    bool
-	closed     bool
-
-	lock       sync.Mutex
-	generation uint32
+type item struct {
 	payload    [][]byte
 	start_time time.Time
-	begin      *sync.Cond
-	committing bool
-	committed  *sync.Cond
-
-	stats      Stats
 }
 
-func NewListenPusher(l net.Listener, logger func(error)) Pusher {
+type pusher struct {
+	listener  net.Listener
+	logger    func(error)
+	keepalive bool
+	queue     chan *item
+	unsent    int32
+	mutex     sync.Mutex
+	flush     *sync.Cond
+	closed    bool
+	stats     Stats
+}
+
+func NewListenPusher(listener net.Listener, logger func(error), keepalive bool) Pusher {
 	p := &pusher{
-		listener: l,
-		logger:   logger,
-		ticker:   time.NewTicker(tick_interval),
+		listener:  listener,
+		logger:    logger,
+		keepalive: keepalive,
+		queue:     make(chan *item, pusher_queue_length),
 	}
 
-	p.begin     = sync.NewCond(&p.lock)
-	p.committed = sync.NewCond(&p.lock)
+	p.flush = sync.NewCond(&p.mutex)
 
 	go p.accept_loop()
-	go p.io_tick()
 
 	return p
 }
 
-func (p *pusher) SendMultipart(message [][]byte, message_time time.Time) error {
-	var message_size uint64
-	var message_data = make([][]byte, 1 + len(message) * 2)
-
-	for i, frame_data := range message {
-		var frame_size = len(frame_data)
-		var frame_head = make([]byte, 4)
-		binary.LittleEndian.PutUint32(frame_head, uint32(frame_size))
-
-		message_data[1 + i * 2 + 0] = frame_head
-		message_data[1 + i * 2 + 1] = frame_data
-
-		message_size += uint64(len(frame_head) + frame_size)
+func (p *pusher) Close() {
+	p.mutex.Lock()
+	for atomic.LoadInt32(&p.unsent) > 0 {
+		p.flush.Wait()
 	}
+	p.mutex.Unlock()
 
-	if message_size > 0xffffffff {
-		return errors.New("message too long")
-	}
-
-	var message_head = make([]byte, 4)
-	binary.LittleEndian.PutUint32(message_head, uint32(message_size))
-
-	message_data[0] = message_head
-
-	return p.send(message_data, message_time)
+	close(p.queue)
+	p.closed = true
+	p.listener.Close()
 }
 
-func (p *pusher) send(payload [][]byte, start_time time.Time) (err error) {
-	p.lock.Lock()
-	defer p.lock.Unlock()
+func (p *pusher) SendMultipart(message [][]byte, start_time time.Time) (err error) {
+	var payload_size uint64
+	payload := make([][]byte, 1 + len(message) * 2)
 
-	for {
-		if p.closing {
-			err = errors.New("pusher closed")
-			return
-		}
+	for i, frame_data := range message {
+		frame_size := len(frame_data)
+		frame_head := make([]byte, 4)
+		binary.LittleEndian.PutUint32(frame_head, uint32(frame_size))
 
-		if p.payload == nil {
-			break
-		}
+		payload[1 + i * 2 + 0] = frame_head
+		payload[1 + i * 2 + 1] = frame_data
 
-		p.committed.Wait()
+		payload_size += uint64(len(frame_head) + frame_size)
 	}
 
-	p.generation++
-	p.payload    = payload
-	p.start_time = start_time
-	p.committing = false
+	if payload_size > 0xffffffff {
+		err = errors.New("message too long")
+		return
+	}
 
-	p.begin.Signal()
+	payload[0] = make([]byte, 4)
+	binary.LittleEndian.PutUint32(payload[0], uint32(payload_size))
+
+	atomic.AddInt32(&p.unsent, 1)
+
+	p.queue<- &item{
+		payload:    payload,
+		start_time: start_time,
+	}
 
 	atomic.AddUint32(&p.stats.Queue, 1)
 
 	return
-}
-
-func (p *pusher) Close() {
-	p.lock.Lock()
-	defer p.lock.Unlock()
-
-	p.closing = true
-
-	for p.payload != nil {
-		p.committed.Wait()
-	}
-
-	p.closed = true
-
-	p.begin.Broadcast()
-	p.ticker.Stop()
-	p.listener.Close()
 }
 
 func (p *pusher) accept_loop() {
@@ -142,156 +118,143 @@ func (p *pusher) accept_loop() {
 		}
 
 		if err == nil {
-			go p.io_loop(conn)
+			go p.conn_loop(conn)
 		}
 	}
 }
 
-func (p *pusher) io_loop(conn net.Conn) {
-	defer p.begin.Signal()
-	defer conn.Close()
+func (p *pusher) conn_loop(conn net.Conn) {
+	defer func() {
+		if conn != nil {
+			conn.Close()
+		}
+	}()
 
 	for {
-		var generation uint32
-		var payload    [][]byte
+		keepalive_timer := time.NewTimer(keepalive_interval)
 
-		/* critical */ func() {
-			p.lock.Lock()
-			defer p.lock.Unlock()
+		select {
+		case item := <-p.queue:
+			keepalive_timer.Stop()
 
-			for {
-				if p.payload != nil {
-					if !p.committing {
-						break
-					}
-				} else {
-					if p.closing {
-						return
-					}
-				}
-
-				p.begin.Wait()
+			if item == nil {
+				return
 			}
 
-			generation = p.generation
-			payload    = p.payload
-		}()
+			if !p.send_item(conn, item) {
+				conn.Close()
+				conn = nil
+			}
 
-		if payload == nil {
-			return
-		}
+			if item.payload != nil {
+				p.queue<- item
+			}
 
-		conn.SetDeadline(time.Now().Add(begin_timeout))
+			if conn == nil {
+				return
+			}
 
-		if _, err := conn.Write([]byte{ begin_command }); err != nil {
-			p.initial_error(err)
-			return
-		}
+		case <-keepalive_timer.C:
+			if !p.keepalive {
+				return
+			}
 
-		for _, buf := range payload {
-			if _, err := conn.Write(buf); err != nil {
+			conn.SetDeadline(time.Now().Add(keepalive_timeout))
+
+			if _, err := conn.Write([]byte{ keepalive_command }); err != nil {
+				p.initial_error(err)
+				return
+			}
+
+			buf := make([]byte, 1)
+
+			_, err := conn.Read(buf)
+			if err == nil && buf[0] != keepalive_reply {
+				err = errors.New("bad reply to keepalive command")
+			}
+			if err != nil {
 				p.initial_error(err)
 				return
 			}
 		}
+	}
+}
 
-		var buf = make([]byte, 1)
+func (p *pusher) send_item(conn net.Conn, item *item) (ok bool) {
+	buf := make([]byte, 1)
 
-		_, err := conn.Read(buf)
-		if err == nil && buf[0] != received_reply {
-			err = errors.New("bad reply to begin command")
-		}
-		if err != nil {
+	conn.SetDeadline(time.Now().Add(begin_timeout))
+
+	if _, err := conn.Write([]byte{ begin_command }); err != nil {
+		p.initial_error(err)
+		return
+	}
+
+	for _, buf := range item.payload {
+		if _, err := conn.Write(buf); err != nil {
 			p.initial_error(err)
 			return
 		}
+	}
 
-		commit := false
+	_, err := conn.Read(buf)
+	if err == nil && buf[0] != received_reply {
+		err = errors.New("bad reply to begin command")
+	}
+	if err != nil {
+		p.initial_error(err)
+		return
+	}
 
-		/* critical */ func() {
-			p.lock.Lock()
-			defer p.lock.Unlock()
+	conn.SetDeadline(time.Now().Add(commit_timeout))
 
-			if p.generation == generation && p.payload != nil && !p.committing {
-				p.committing = true
-				commit = true
-			}
-		}()
+	commanded := false
 
-		conn.SetDeadline(time.Now().Add(commit_timeout))
-
-		commanded := false
-
-		if commit {
-			if _, err := conn.Write([]byte{ commit_command }); err != nil {
-				p.log(err)
-			} else {
-				latency := uint32(time.Now().Sub(p.start_time).Nanoseconds() / 1000)
-				if binary.Write(conn, binary.LittleEndian, &latency) == nil {
-					commanded = true
-				}
-			}
-		} else {
-			if _, err := conn.Write([]byte{ rollback_command }); err != nil {
-				p.log(err)
-			} else {
-				commanded = true
-			}
-		}
-
-		reply := no_reply
-
-		if commit {
-			var err error
-
-			if commanded {
-				_, err = conn.Read(buf)
-				if err == nil {
-					reply = buf[0]
-				}
-			}
-
-			/* critical */ func() {
-				p.lock.Lock()
-				defer p.lock.Unlock()
-
-				p.committing = false
-
-				switch reply {
-				case engaged_reply:
-					p.payload = nil
-					p.committed.Broadcast()
-
-				case canceled_reply:
-					p.begin.Signal()
-				}
-			}()
-
-			switch reply {
-			case engaged_reply:
-				atomic.AddUint32(&p.stats.Send, 1)
-
-			case canceled_reply:
-				atomic.AddUint32(&p.stats.Cancel, 1)
-
-			default:
-				if err == nil {
-					err = errors.New("bad reply to commit command")
-				}
-
-				p.log(err)
-				atomic.AddUint32(&p.stats.Error, 1)
-				return
-			}
-		} else {
-			if commanded {
-				atomic.AddUint32(&p.stats.Rollback, 1)
-			} else {
-				atomic.AddUint32(&p.stats.Error, 1)
-				return
-			}
+	if _, err := conn.Write([]byte{ commit_command }); err != nil {
+		p.log(err)
+	} else {
+		latency := uint32(time.Now().Sub(item.start_time).Nanoseconds() / 1000)
+		if binary.Write(conn, binary.LittleEndian, &latency) == nil {
+			commanded = true
 		}
 	}
+
+	reply := no_reply
+
+	if commanded {
+		_, err = conn.Read(buf)
+		if err == nil {
+			reply = buf[0]
+		}
+	}
+
+	switch reply {
+	case engaged_reply:
+		item.payload = nil
+		unsent := atomic.AddInt32(&p.unsent, -1)
+		atomic.AddUint32(&p.stats.Send, 1)
+		ok = true
+
+		if unsent == 0 {
+			p.mutex.Lock()
+			p.flush.Broadcast()
+			p.mutex.Unlock()
+		}
+
+	case canceled_reply:
+		atomic.AddUint32(&p.stats.Cancel, 1)
+		ok = true
+
+	default:
+		if err == nil {
+			err = errors.New("bad reply to commit command")
+		}
+
+		p.log(err)
+		atomic.AddUint32(&p.stats.Error, 1)
+	}
+
+	return
 }
 
 func (p *pusher) initial_error(err error) {
@@ -312,12 +275,6 @@ func (p *pusher) initial_error(err error) {
 func (p *pusher) log(err error) {
 	if p.logger != nil {
 		p.logger(err)
-	}
-}
-
-func (p *pusher) io_tick() {
-	for _ = range p.ticker.C {
-		p.begin.Signal()
 	}
 }
 
