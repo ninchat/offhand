@@ -122,10 +122,16 @@ func (p *pusher) accept_loop() {
 }
 
 func (p *pusher) conn_loop(conn net.Conn) {
+	disable_linger := true
+
 	defer func() {
-		if conn != nil {
-			conn.Close()
+		if disable_linger {
+			if tcp := conn.(*net.TCPConn); tcp != nil {
+				tcp.SetLinger(0)
+			}
 		}
+
+		conn.Close()
 	}()
 
 	for {
@@ -136,6 +142,7 @@ func (p *pusher) conn_loop(conn net.Conn) {
 			keepalive_timer.Stop()
 
 			if item == nil {
+				disable_linger = false
 				return
 			}
 
