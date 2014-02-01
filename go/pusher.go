@@ -36,23 +36,21 @@ type item struct {
 }
 
 type pusher struct {
-	listener  net.Listener
-	logger    func(error)
-	keepalive bool
-	queue     chan *item
-	unsent    int32
-	mutex     sync.Mutex
-	flush     *sync.Cond
-	closed    bool
-	stats     Stats
+	listener net.Listener
+	logger   func(error)
+	queue    chan *item
+	unsent   int32
+	mutex    sync.Mutex
+	flush    *sync.Cond
+	closed   bool
+	stats    Stats
 }
 
-func NewListenPusher(listener net.Listener, logger func(error), keepalive bool) Pusher {
+func NewListenPusher(listener net.Listener, logger func(error)) Pusher {
 	p := &pusher{
-		listener:  listener,
-		logger:    logger,
-		keepalive: keepalive,
-		queue:     make(chan *item, pusher_queue_length),
+		listener: listener,
+		logger:   logger,
+		queue:    make(chan *item, pusher_queue_length),
 	}
 
 	p.flush = sync.NewCond(&p.mutex)
@@ -155,10 +153,6 @@ func (p *pusher) conn_loop(conn net.Conn) {
 			}
 
 		case <-keepalive_timer.C:
-			if !p.keepalive {
-				return
-			}
-
 			conn.SetDeadline(time.Now().Add(keepalive_timeout))
 
 			if _, err := conn.Write([]byte{ keepalive_command }); err != nil {
