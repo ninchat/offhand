@@ -12,7 +12,6 @@ const (
 	keepalive_timeout  = time.Duration(10e9)
 
 	begin_command      = byte(10)
-	oldcommit_command  = byte(20)
 	commit_command     = byte(21)
 	rollback_command   = byte(30)
 	keepalive_command  = byte(40)

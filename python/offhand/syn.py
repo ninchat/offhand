@@ -179,9 +179,7 @@ def connect_pull(handler, address, connection_type=Connection):
 					conn.send(REPLY_RECEIVED)
 
 					command, = conn.recv(1)
-					if command == COMMAND_OLDCOMMIT:
-						start_time = time.time()
-					elif command == COMMAND_COMMIT:
+					if command == COMMAND_COMMIT:
 						latency, = struct.unpack(b"<I", conn.recv(4))
 						start_time = time.time() - latency / 1000000.0
 					elif command == COMMAND_ROLLBACK:
