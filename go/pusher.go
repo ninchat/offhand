@@ -25,7 +25,7 @@ type Stats struct {
 }
 
 type Pusher interface {
-	SendMultipart(message [][]byte, start_time time.Time)
+	SendMultipart(message [][]byte, start_time time.Time) bool
 	Close()
 	Stats() *Stats
 }
@@ -40,8 +40,9 @@ type pusher struct {
 	logger   func(error)
 	queue    chan *item
 	unsent   int32
-	mutex    sync.Mutex
+	mutex    sync.RWMutex
 	flush    *sync.Cond
+	closing  bool
 	closed   bool
 	stats    Stats
 }
@@ -62,17 +63,32 @@ func NewListenPusher(listener net.Listener, logger func(error)) Pusher {
 
 func (p *pusher) Close() {
 	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	if p.closing {
+		return
+	}
+
+	p.closing = true
+
 	for atomic.LoadInt32(&p.unsent) > 0 {
 		p.flush.Wait()
 	}
-	p.mutex.Unlock()
 
 	close(p.queue)
+
 	p.closed = true
 	p.listener.Close()
 }
 
-func (p *pusher) SendMultipart(message [][]byte, start_time time.Time) {
+func (p *pusher) SendMultipart(message [][]byte, start_time time.Time) bool {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	if p.closing {
+		return false
+	}
+
 	var message_size uint32
 
 	for _, frame := range message {
@@ -98,6 +114,8 @@ func (p *pusher) SendMultipart(message [][]byte, start_time time.Time) {
 	p.queue<- &item{data, start_time}
 
 	atomic.AddUint32(&p.stats.Queue, 1)
+
+	return true
 }
 
 func (p *pusher) accept_loop() {
