@@ -25,13 +25,13 @@ type Stats struct {
 }
 
 type Pusher interface {
-	SendMultipart(message [][]byte, message_time time.Time) error
+	SendMultipart(message [][]byte, start_time time.Time)
 	Close()
 	Stats() *Stats
 }
 
 type item struct {
-	payload    [][]byte
+	data       []byte
 	start_time time.Time
 }
 
@@ -72,39 +72,32 @@ func (p *pusher) Close() {
 	p.listener.Close()
 }
 
-func (p *pusher) SendMultipart(message [][]byte, start_time time.Time) (err error) {
-	var payload_size uint64
-	payload := make([][]byte, 1 + len(message) * 2)
+func (p *pusher) SendMultipart(message [][]byte, start_time time.Time) {
+	var message_size uint32
 
-	for i, frame_data := range message {
-		frame_size := len(frame_data)
-		frame_head := make([]byte, 4)
-		binary.LittleEndian.PutUint32(frame_head, uint32(frame_size))
-
-		payload[1 + i * 2 + 0] = frame_head
-		payload[1 + i * 2 + 1] = frame_data
-
-		payload_size += uint64(len(frame_head) + frame_size)
+	for _, frame := range message {
+		message_size += uint32(4 + len(frame))
 	}
 
-	if payload_size > 0xffffffff {
-		err = errors.New("message too long")
-		return
-	}
+	data := make([]byte, 5 + message_size)
+	data[0] = begin_command
+	binary.LittleEndian.PutUint32(data[1:5], message_size)
 
-	payload[0] = make([]byte, 4)
-	binary.LittleEndian.PutUint32(payload[0], uint32(payload_size))
+	pos := data[5:]
+
+	for _, frame := range message {
+		binary.LittleEndian.PutUint32(pos[:4], uint32(len(frame)))
+		pos = pos[4:]
+
+		copy(pos, frame)
+		pos = pos[len(frame):]
+	}
 
 	atomic.AddInt32(&p.unsent, 1)
 
-	p.queue<- &item{
-		payload:    payload,
-		start_time: start_time,
-	}
+	p.queue<- &item{data, start_time}
 
 	atomic.AddUint32(&p.stats.Queue, 1)
-
-	return
 }
 
 func (p *pusher) accept_loop() {
@@ -134,6 +127,8 @@ func (p *pusher) conn_loop(conn net.Conn) {
 		conn.Close()
 	}()
 
+	reply_buf := make([]byte, 1)
+
 	for {
 		keepalive_timer := time.NewTimer(keepalive_interval)
 
@@ -147,15 +142,6 @@ func (p *pusher) conn_loop(conn net.Conn) {
 			}
 
 			if !p.send_item(conn, item) {
-				conn.Close()
-				conn = nil
-			}
-
-			if item.payload != nil {
-				p.queue<- item
-			}
-
-			if conn == nil {
 				return
 			}
 
@@ -163,18 +149,17 @@ func (p *pusher) conn_loop(conn net.Conn) {
 			conn.SetDeadline(time.Now().Add(keepalive_timeout))
 
 			if _, err := conn.Write([]byte{ keepalive_command }); err != nil {
-				p.initial_error(err)
+				p.log_initial(err)
 				return
 			}
 
-			buf := make([]byte, 1)
-
-			_, err := conn.Read(buf)
-			if err == nil && buf[0] != keepalive_reply {
-				err = errors.New("bad reply to keepalive command")
+			if _, err := conn.Read(reply_buf); err != nil {
+				p.log_initial(err)
+				return
 			}
-			if err != nil {
-				p.initial_error(err)
+
+			if reply_buf[0] != keepalive_reply {
+				p.log(errors.New("bad reply to keepalive command"))
 				return
 			}
 		}
@@ -182,80 +167,118 @@ func (p *pusher) conn_loop(conn net.Conn) {
 }
 
 func (p *pusher) send_item(conn net.Conn, item *item) (ok bool) {
-	buf := make([]byte, 1)
+	reply_buf := make([]byte, 1)
+	rollback := false
+
+	// begin command + message
 
 	conn.SetDeadline(time.Now().Add(begin_timeout))
 
-	if _, err := conn.Write([]byte{ begin_command }); err != nil {
-		p.initial_error(err)
-		return
-	}
+	if n, err := conn.Write(item.data); err != nil {
+		if rollback {
+			return
+		}
 
-	for _, buf := range item.payload {
-		if _, err := conn.Write(buf); err != nil {
-			p.initial_error(err)
+		p.queue<- item
+		p.log_initial(err)
+
+		if !timeout(err) {
+			return
+		}
+
+		rollback = true
+
+		conn.SetDeadline(time.Now().Add(rollback_timeout))
+
+		if _, err := conn.Write(item.data[n:]); err != nil {
 			return
 		}
 	}
 
-	_, err := conn.Read(buf)
-	if err == nil && buf[0] != received_reply {
-		err = errors.New("bad reply to begin command")
+	// received reply
+
+	for _, err := conn.Read(reply_buf); err != nil; {
+		if rollback {
+			return
+		}
+
+		p.queue<- item
+		p.log_initial(err)
+
+		if !timeout(err) {
+			return
+		}
+
+		rollback = true
+
+		conn.SetDeadline(time.Now().Add(rollback_timeout))
 	}
-	if err != nil {
-		p.initial_error(err)
+
+	if reply_buf[0] != received_reply {
+		if !rollback {
+			p.queue<- item
+			p.log(errors.New("bad reply to begin command"))
+		}
+
 		return
 	}
 
+	// rollback command
+
+	if rollback {
+		if _, err := conn.Write([]byte{ rollback_command }); err != nil {
+			return
+		}
+
+		ok = true
+		return
+	}
+
+	// commit command
+
 	conn.SetDeadline(time.Now().Add(commit_timeout))
 
-	commanded := false
+	commit_buf := make([]byte, 5)
+	commit_buf[0] = commit_command
+	binary.LittleEndian.PutUint32(commit_buf[1:], uint32(time.Now().Sub(item.start_time).Nanoseconds() / 1000))
 
-	if _, err := conn.Write([]byte{ commit_command }); err != nil {
+	if _, err := conn.Write(commit_buf); err != nil {
+		p.queue<- item
 		p.log(err)
-	} else {
-		latency := uint32(time.Now().Sub(item.start_time).Nanoseconds() / 1000)
-		if binary.Write(conn, binary.LittleEndian, &latency) == nil {
-			commanded = true
-		}
+		return
 	}
 
-	reply := no_reply
+	// commit reply
 
-	if commanded {
-		_, err = conn.Read(buf)
-		if err == nil {
-			reply = buf[0]
-		}
+	if _, err := conn.Read(reply_buf); err != nil {
+		p.queue<- item
+		p.log(err)
+		return
 	}
 
-	switch reply {
+	switch reply_buf[0] {
 	case engaged_reply:
-		atomic.AddUint32(&p.stats.Send, 1)
-		item.payload = nil
-		ok = true
-
 		if atomic.AddInt32(&p.unsent, -1) == 0 {
 			p.flush.Broadcast()
 		}
 
+		atomic.AddUint32(&p.stats.Send, 1)
+		ok = true
+
 	case canceled_reply:
+		p.queue<- item
 		atomic.AddUint32(&p.stats.Cancel, 1)
 		ok = true
 
 	default:
-		if err == nil {
-			err = errors.New("bad reply to commit command")
-		}
-
-		p.log(err)
-		atomic.AddUint32(&p.stats.Error, 1)
+		p.queue<- item
+		p.log(errors.New("bad reply to commit command"))
 	}
 
 	return
 }
 
-func (p *pusher) initial_error(err error) {
+func (p *pusher) log_initial(err error) {
 	soft := false
 
 	if err == io.EOF {
@@ -266,13 +289,18 @@ func (p *pusher) initial_error(err error) {
 
 	if !soft {
 		p.log(err)
-		atomic.AddUint32(&p.stats.Error, 1)
 	}
 }
 
 func (p *pusher) log(err error) {
 	if p.logger != nil {
 		p.logger(err)
+	}
+
+	if timeout(err) {
+		atomic.AddUint32(&p.stats.Rollback, 1)
+	} else {
+		atomic.AddUint32(&p.stats.Error, 1)
 	}
 }
 

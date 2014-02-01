@@ -1,6 +1,7 @@
 package offhand
 
 import (
+	"net"
 	"time"
 )
 
@@ -9,7 +10,8 @@ const (
 
 	begin_timeout      = time.Duration(10e9)
 	commit_timeout     = time.Duration(30e9)
-	keepalive_timeout  = time.Duration(10e9)
+	rollback_timeout   = time.Duration(70e9)
+	keepalive_timeout  = time.Duration(20e9)
 
 	begin_command      = byte(10)
 	commit_command     = byte(21)
@@ -22,3 +24,8 @@ const (
 	canceled_reply     = byte(22)
 	keepalive_reply    = byte(41)
 )
+
+func timeout(err error) bool {
+	operr := err.(*net.OpError)
+	return operr != nil && operr.Timeout()
+}
