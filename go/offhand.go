@@ -26,6 +26,6 @@ const (
 )
 
 func timeout(err error) bool {
-	operr := err.(*net.OpError)
-	return operr != nil && operr.Timeout()
+	operr, ok := err.(*net.OpError)
+	return ok && operr.Timeout()
 }
