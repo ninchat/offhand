@@ -22,8 +22,8 @@ from .protocol import *
 
 class Reconnect(Exception):
 
-	def __init__(self, timedout):
-		self.timedout = timedout
+	def __init__(self, notbad):
+		self.notbad = notbad
 
 class Connection(object):
 	socket_family = socket.AF_INET
@@ -69,7 +69,7 @@ class Connection(object):
 
 		sock = None
 		ok = False
-		timedout = False
+		notbad = False
 
 		try:
 			sock = self.socket()
@@ -79,7 +79,7 @@ class Connection(object):
 		except socket.error as e:
 			if e.errno not in self.soft_connect_errors:
 				log.exception("%s: connect", self)
-			timedout = (e.errno == errno.ETIMEDOUT)
+			notbad = (e.errno == errno.ETIMEDOUT)
 		except Exception:
 			log.exception("%s: connect", self)
 
@@ -89,55 +89,62 @@ class Connection(object):
 			if sock:
 				sock.close()
 
-			raise Reconnect(timedout)
+			raise Reconnect(notbad)
 
 	def send(self, data):
 		n = 0
 
 		while n < len(data):
 			ok = False
-			timedout = False
+			notbad = False
 
 			try:
-				n += self.sock.send(data[n:])
-				ok = True
+				ret = self.sock.send(data[n:])
+				if ret == 0:
+					log.error("%s: unexpected EOF", self)
+					notbad = True
+				else:
+					n += ret
+					ok = True
 			except socket.error as e:
 				if e.errno == errno.EAGAIN:
 					continue
 				log.error("%s: send: %s", self, e)
-				timedout = (e.errno == errno.ETIMEDOUT)
+				notbad = e.errno in (errno.ECONNRESET, errno.ETIMEDOUT)
 			except Exception:
 				log.exception("%s: send", self)
 
 			if not ok:
-				raise Reconnect(timedout)
+				raise Reconnect(notbad)
 
 	def recv(self, size, initial=False):
 		data = b""
 
 		while len(data) < size:
 			buf = None
-			timedout = False
+			notbad = False
 
 			try:
 				buf = self.sock.recv(size - len(data))
 			except socket.timeout as e:
 				if not initial:
 					log.error("%s: recv: %s", self, e)
-				timedout = True
+				notbad = True
 			except socket.error as e:
 				if e.errno == errno.EAGAIN:
 					continue
 				log.error("%s: recv: %s", self, e)
-				timedout = (e.errno == errno.ETIMEDOUT)
+				notbad = e.errno in (errno.ECONNRESET, errno.ETIMEDOUT)
 			except Exception:
 				log.exception("%s: recv", self)
 			else:
-				if not buf and (not initial or data):
-					log.error("%s: unexpected EOF", self)
+				if not buf:
+					if not initial or data:
+						log.error("%s: unexpected EOF", self)
+					notbad = True
 
 			if not buf:
-				raise Reconnect(timedout)
+				raise Reconnect(notbad)
 
 			data += buf
 
@@ -186,7 +193,7 @@ def connect_pull(handler, address, connection_type=Connection):
 
 					conn.send(REPLY_ENGAGED if engaged else REPLY_CANCELED)
 			except Reconnect as e:
-				if e.timedout:
+				if e.notbad:
 					delay = False
 			except (CorruptedMessage, UnexpectedCommand) as e:
 				log.error("%s: %s", conn, e)
