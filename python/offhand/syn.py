@@ -39,7 +39,12 @@ class Connection(object):
 
 	@classmethod
 	def socket(cls):
-		return socket.socket(cls.socket_family, cls.socket_type)
+		sock = socket.socket(cls.socket_family, cls.socket_type)
+		sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+		sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 1)
+		sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 19)
+		sock.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
+		return sock
 
 	def __init__(self, address):
 		self.address = address
