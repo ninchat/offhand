@@ -3,7 +3,6 @@ package offhand
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -17,11 +16,13 @@ const (
 )
 
 type Stats struct {
-	Queue    uint32
-	Send     uint32
-	Error    uint32
-	Rollback uint32
-	Cancel   uint32
+	Conns          int32
+	Queued         int32
+	TotalDelayUs   uint64
+	TotalSent      uint64
+	TotalTimeouts  uint64
+	TotalErrors    uint64
+	TotalCancelled uint64
 }
 
 type Pusher interface {
@@ -39,7 +40,6 @@ type pusher struct {
 	listener net.Listener
 	logger   func(error)
 	queue    chan *item
-	unsent   int32
 	mutex    sync.RWMutex
 	flush    *sync.Cond
 	closing  bool
@@ -71,7 +71,7 @@ func (p *pusher) Close() {
 
 	p.closing = true
 
-	for atomic.LoadInt32(&p.unsent) > 0 {
+	for atomic.LoadInt32(&p.stats.Queued) > 0 {
 		p.flush.Wait()
 	}
 
@@ -109,11 +109,9 @@ func (p *pusher) SendMultipart(message [][]byte, start_time time.Time) bool {
 		pos = pos[len(frame):]
 	}
 
-	atomic.AddInt32(&p.unsent, 1)
+	atomic.AddInt32(&p.stats.Queued, 1)
 
 	p.queue<- &item{data, start_time}
-
-	atomic.AddUint32(&p.stats.Queue, 1)
 
 	return true
 }
@@ -133,6 +131,9 @@ func (p *pusher) accept_loop() {
 }
 
 func (p *pusher) conn_loop(conn net.Conn) {
+	atomic.AddInt32(&p.stats.Conns, 1)
+	defer atomic.AddInt32(&p.stats.Conns, -1)
+
 	disable_linger := true
 
 	defer func() {
@@ -276,16 +277,17 @@ func (p *pusher) send_item(conn net.Conn, item *item) (ok bool) {
 
 	switch reply_buf[0] {
 	case engaged_reply:
-		if atomic.AddInt32(&p.unsent, -1) == 0 {
+		if atomic.AddInt32(&p.stats.Queued, -1) == 0 {
 			p.flush.Broadcast()
 		}
 
-		atomic.AddUint32(&p.stats.Send, 1)
+		atomic.AddUint64(&p.stats.TotalDelayUs, uint64(time.Now().Sub(item.start_time).Nanoseconds()) / 1000)
+		atomic.AddUint64(&p.stats.TotalSent, 1)
 		ok = true
 
 	case canceled_reply:
 		p.queue<- item
-		atomic.AddUint32(&p.stats.Cancel, 1)
+		atomic.AddUint64(&p.stats.TotalCancelled, 1)
 		ok = true
 
 	default:
@@ -316,23 +318,20 @@ func (p *pusher) log(err error) {
 	}
 
 	if timeout(err) {
-		atomic.AddUint32(&p.stats.Rollback, 1)
+		atomic.AddUint64(&p.stats.TotalTimeouts, 1)
 	} else {
-		atomic.AddUint32(&p.stats.Error, 1)
+		atomic.AddUint64(&p.stats.TotalErrors, 1)
 	}
 }
 
 func (p *pusher) Stats() *Stats {
 	return &Stats{
-		atomic.LoadUint32(&p.stats.Queue),
-		atomic.LoadUint32(&p.stats.Send),
-		atomic.LoadUint32(&p.stats.Error),
-		atomic.LoadUint32(&p.stats.Rollback),
-		atomic.LoadUint32(&p.stats.Cancel),
+		atomic.LoadInt32(&p.stats.Conns),
+		atomic.LoadInt32(&p.stats.Queued),
+		atomic.LoadUint64(&p.stats.TotalDelayUs),
+		atomic.LoadUint64(&p.stats.TotalSent),
+		atomic.LoadUint64(&p.stats.TotalTimeouts),
+		atomic.LoadUint64(&p.stats.TotalErrors),
+		atomic.LoadUint64(&p.stats.TotalCancelled),
 	}
-}
-
-func (s *Stats) String() string {
-	return fmt.Sprintf("queue=%v send=%v error=%v rollback=%v cancel=%v",
-		s.Queue, s.Send, s.Error, s.Rollback, s.Cancel)
 }
