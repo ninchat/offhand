@@ -28,7 +28,7 @@ type Stats struct {
 type Pusher interface {
 	SendMultipart(message [][]byte, start_time time.Time) bool
 	Close()
-	Stats() *Stats
+	LoadStats(s *Stats)
 }
 
 type item struct {
@@ -37,6 +37,8 @@ type item struct {
 }
 
 type pusher struct {
+	Stats
+
 	listener net.Listener
 	logger   func(error)
 	queue    chan *item
@@ -44,7 +46,6 @@ type pusher struct {
 	flush    *sync.Cond
 	closing  bool
 	closed   bool
-	stats    Stats
 }
 
 func NewListenPusher(listener net.Listener, logger func(error)) Pusher {
@@ -71,7 +72,7 @@ func (p *pusher) Close() {
 
 	p.closing = true
 
-	for atomic.LoadInt32(&p.stats.Queued) > 0 {
+	for atomic.LoadInt32(&p.Queued) > 0 {
 		p.flush.Wait()
 	}
 
@@ -109,7 +110,7 @@ func (p *pusher) SendMultipart(message [][]byte, start_time time.Time) bool {
 		pos = pos[len(frame):]
 	}
 
-	atomic.AddInt32(&p.stats.Queued, 1)
+	atomic.AddInt32(&p.Queued, 1)
 
 	p.queue<- &item{data, start_time}
 
@@ -131,8 +132,8 @@ func (p *pusher) accept_loop() {
 }
 
 func (p *pusher) conn_loop(conn net.Conn) {
-	atomic.AddInt32(&p.stats.Conns, 1)
-	defer atomic.AddInt32(&p.stats.Conns, -1)
+	atomic.AddInt32(&p.Conns, 1)
+	defer atomic.AddInt32(&p.Conns, -1)
 
 	disable_linger := true
 
@@ -277,17 +278,17 @@ func (p *pusher) send_item(conn net.Conn, item *item) (ok bool) {
 
 	switch reply_buf[0] {
 	case engaged_reply:
-		if atomic.AddInt32(&p.stats.Queued, -1) == 0 {
+		if atomic.AddInt32(&p.Queued, -1) == 0 {
 			p.flush.Broadcast()
 		}
 
-		atomic.AddUint64(&p.stats.TotalDelayUs, uint64(time.Now().Sub(item.start_time).Nanoseconds()) / 1000)
-		atomic.AddUint64(&p.stats.TotalSent, 1)
+		atomic.AddUint64(&p.TotalDelayUs, uint64(time.Now().Sub(item.start_time).Nanoseconds()) / 1000)
+		atomic.AddUint64(&p.TotalSent, 1)
 		ok = true
 
 	case canceled_reply:
 		p.queue<- item
-		atomic.AddUint64(&p.stats.TotalCancelled, 1)
+		atomic.AddUint64(&p.TotalCancelled, 1)
 		ok = true
 
 	default:
@@ -318,20 +319,18 @@ func (p *pusher) log(err error) {
 	}
 
 	if timeout(err) {
-		atomic.AddUint64(&p.stats.TotalTimeouts, 1)
+		atomic.AddUint64(&p.TotalTimeouts, 1)
 	} else {
-		atomic.AddUint64(&p.stats.TotalErrors, 1)
+		atomic.AddUint64(&p.TotalErrors, 1)
 	}
 }
 
-func (p *pusher) Stats() *Stats {
-	return &Stats{
-		atomic.LoadInt32(&p.stats.Conns),
-		atomic.LoadInt32(&p.stats.Queued),
-		atomic.LoadUint64(&p.stats.TotalDelayUs),
-		atomic.LoadUint64(&p.stats.TotalSent),
-		atomic.LoadUint64(&p.stats.TotalTimeouts),
-		atomic.LoadUint64(&p.stats.TotalErrors),
-		atomic.LoadUint64(&p.stats.TotalCancelled),
-	}
+func (p *pusher) LoadStats(s *Stats) {
+	s.Conns          = atomic.LoadInt32(&p.Conns)
+	s.Queued         = atomic.LoadInt32(&p.Queued)
+	s.TotalDelayUs   = atomic.LoadUint64(&p.TotalDelayUs)
+	s.TotalSent      = atomic.LoadUint64(&p.TotalSent)
+	s.TotalTimeouts  = atomic.LoadUint64(&p.TotalTimeouts)
+	s.TotalErrors    = atomic.LoadUint64(&p.TotalErrors)
+	s.TotalCancelled = atomic.LoadUint64(&p.TotalCancelled)
 }
