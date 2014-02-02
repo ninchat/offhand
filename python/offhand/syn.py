@@ -253,7 +253,7 @@ class ConnectionStat(Stat):
 	def update_secondary(self, value):
 		self.stats.connected += value
 
-class OccupationStat(object):
+class OccupationStat(Stat):
 
 	def update_primary(self, value):
 		self.stats.idle += value
