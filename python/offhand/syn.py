@@ -29,7 +29,7 @@ class Reconnect(Exception):
 class Connection(object):
 	socket_family = socket.AF_INET
 	socket_type = socket.SOCK_STREAM
-	timeout = 34
+	timeout = 77
 
 	soft_connect_errors = (
 		errno.ECONNREFUSED,
