@@ -12,7 +12,6 @@ import time
 
 from . import (
 	CorruptedMessage,
-	Stats,
 	UnexpectedCommand,
 	log,
 	parse_message,
@@ -22,13 +21,15 @@ from .protocol import *
 
 class Reconnect(Exception):
 
-	def __init__(self, timedout):
+	def __init__(self, timedout=False, eof=False, initial=False):
 		self.timedout = timedout
+		self.eof = eof
+		self.initial = initial
 
 class Connection(object):
 	socket_family = socket.AF_INET
 	socket_type = socket.SOCK_STREAM
-	timeout = 34
+	timeout = 77
 
 	soft_connect_errors = (
 		errno.ECONNREFUSED,
@@ -39,7 +40,12 @@ class Connection(object):
 
 	@classmethod
 	def socket(cls):
-		return socket.socket(cls.socket_family, cls.socket_type)
+		sock = socket.socket(cls.socket_family, cls.socket_type)
+		sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+		sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 1)
+		sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 19)
+		sock.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
+		return sock
 
 	def __init__(self, address):
 		self.address = address
@@ -97,20 +103,27 @@ class Connection(object):
 		while n < len(data):
 			ok = False
 			timedout = False
+			eof = False
 
 			try:
-				n += self.sock.send(data[n:])
-				ok = True
+				ret = self.sock.send(data[n:])
+				if ret == 0:
+					log.error("%s: unexpected EOF", self)
+					eof = True
+				else:
+					n += ret
+					ok = True
 			except socket.error as e:
 				if e.errno == errno.EAGAIN:
 					continue
 				log.error("%s: send: %s", self, e)
 				timedout = (e.errno == errno.ETIMEDOUT)
+				eof = (e.errno == errno.ECONNRESET)
 			except Exception:
 				log.exception("%s: send", self)
 
 			if not ok:
-				raise Reconnect(timedout)
+				raise Reconnect(timedout, eof)
 
 	def recv(self, size, initial=False):
 		data = b""
@@ -118,6 +131,7 @@ class Connection(object):
 		while len(data) < size:
 			buf = None
 			timedout = False
+			eof = False
 
 			try:
 				buf = self.sock.recv(size - len(data))
@@ -130,63 +144,119 @@ class Connection(object):
 					continue
 				log.error("%s: recv: %s", self, e)
 				timedout = (e.errno == errno.ETIMEDOUT)
+				eof = (e.errno == errno.ECONNRESET)
 			except Exception:
 				log.exception("%s: recv", self)
 			else:
-				if not buf and (not initial or data):
-					log.error("%s: unexpected EOF", self)
+				if not buf:
+					if not initial or data:
+						log.error("%s: unexpected EOF", self)
+					eof = True
 
 			if not buf:
-				raise Reconnect(timedout)
+				raise Reconnect(timedout, eof, initial)
 
 			data += buf
 
 		return data
 
-def connect_pull(handler, address, connection_type=Connection):
+def connect_pull(handler, address, stats, connection_type=Connection):
 	with connection_type(address) as conn:
+		conn_stat = ConnectionStat(stats)
+		occu_stat = OccupationStat(stats)
 		delay = False
 
 		while True:
-			conn.close()
+			with conn_stat:
+				conn.close()
 
-			if delay:
-				time.sleep(1)
+				if delay:
+					time.sleep(1)
 
-			delay = True
+				delay = True
 
-			try:
-				conn.connect()
+				try:
+					conn.connect()
+					conn_stat.trigger()
 
-				while True:
-					command, = conn.recv(1, initial=True)
-					if command == COMMAND_KEEPALIVE:
-						conn.send(REPLY_KEEPALIVE)
-						continue
-					elif command != COMMAND_BEGIN:
-						raise UnexpectedCommand(command)
+					while True:
+						with occu_stat:
+							command, = conn.recv(1, initial=True)
+							occu_stat.trigger()
 
-					size, = struct.unpack(b"<I", conn.recv(4))
-					data = conn.recv(size)
+							if command == COMMAND_KEEPALIVE:
+								conn.send(REPLY_KEEPALIVE)
+								continue
+							elif command != COMMAND_BEGIN:
+								raise UnexpectedCommand(command)
 
-					conn.send(REPLY_RECEIVED)
+							size, = struct.unpack(b"<I", conn.recv(4))
+							data = conn.recv(size)
 
-					command, = conn.recv(1)
-					if command == COMMAND_OLDCOMMIT:
-						start_time = time.time()
-					elif command == COMMAND_COMMIT:
-						latency, = struct.unpack(b"<I", conn.recv(4))
-						start_time = time.time() - latency / 1000000.0
-					elif command == COMMAND_ROLLBACK:
-						continue
+							conn.send(REPLY_RECEIVED)
+
+							command, = conn.recv(1)
+							if command == COMMAND_COMMIT:
+								latency, = struct.unpack(b"<I", conn.recv(4))
+								start_time = time.time() - latency / 1000000.0
+							elif command == COMMAND_ROLLBACK:
+								stats.total_rolledback += 1
+								continue
+							else:
+								raise UnexpectedCommand(command)
+
+							if handler(parse_message(data), start_time):
+								conn.send(REPLY_ENGAGED)
+								stats.total_engaged += 1
+							else:
+								conn.send(REPLY_CANCELED)
+								stats.total_canceled += 1
+				except Reconnect as e:
+					if e.timedout or e.eof:
+						delay = False
+
+					if e.timedout:
+						stats.total_timeouts += 1
+					elif e.eof and e.initial:
+						stats.total_disconnects += 1
 					else:
-						raise UnexpectedCommand(command)
+						stats.total_errors += 1
+				except (CorruptedMessage, UnexpectedCommand) as e:
+					log.error("%s: %s", conn, e)
+					stats.total_errors += 1
 
-					engaged = handler(parse_message(data), start_time)
+class Stat(object):
 
-					conn.send(REPLY_ENGAGED if engaged else REPLY_CANCELED)
-			except Reconnect as e:
-				if e.timedout:
-					delay = False
-			except (CorruptedMessage, UnexpectedCommand) as e:
-				log.error("%s: %s", conn, e)
+	def __init__(self, stats):
+		self.stats = stats
+
+	def __enter__(self):
+		self.update_primary(1)
+		self._triggered = False
+
+	def __exit__(self, *exc):
+		if self._triggered:
+			self.update_secondary(-1)
+		else:
+			self.update_primary(-1)
+
+	def trigger(self):
+		self.update_secondary(1)
+		self.update_primary(-1)
+		self._triggered = True
+
+class ConnectionStat(Stat):
+
+	def update_primary(self, value):
+		self.stats.connecting += value
+
+	def update_secondary(self, value):
+		self.stats.connected += value
+
+class OccupationStat(Stat):
+
+	def update_primary(self, value):
+		self.stats.idle += value
+
+	def update_secondary(self, value):
+		self.stats.busy += value

@@ -34,16 +34,17 @@ class CorruptedMessage(Exception):
 		Exception.__init__(self, "Corrupted message")
 
 class Stats(object):
-
 	__slots__ = [
-		"begin",
-		"commit",
-		"rollback",
-		"engage",
-		"cancel",
-		"error",
-		"reconnect",
-		"disconnect",
+		"connecting",
+		"connected",
+		"idle",
+		"busy",
+		"total_engaged",
+		"total_canceled",
+		"total_rolledback",
+		"total_timeouts",
+		"total_disconnects",
+		"total_errors",
 	]
 
 	def __init__(self, copy=None):
@@ -55,21 +56,6 @@ class Stats(object):
 
 	def __str__(self):
 		return " ".join("%s=%s" % (key, getattr(self, key)) for key in self.__slots__)
-
-	def __add__(self, x):
-		return self.__operate(operator.add, lambda key: getattr(x, key))
-
-	def __sub__(self, x):
-		return self.__operate(operator.sub, lambda key: getattr(x, key))
-
-	def __div__(self, x):
-		return self.__operate(operator.div, lambda key: x)
-
-	def __operate(self, op, getter):
-		r = type(self)(self)
-		for key in self.__slots__:
-			setattr(r, key, op(getattr(self, key), getter(key)))
-		return r
 
 def parse_message(data):
 	message = []
