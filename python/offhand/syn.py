@@ -82,6 +82,8 @@ class Connection(object):
 			sock.settimeout(self.timeout)
 			sock.connect(self.address)
 			ok = True
+		except socket.timeout:
+			timedout = True
 		except socket.error as e:
 			if e.errno not in self.soft_connect_errors:
 				log.exception("%s: connect", self)
@@ -113,6 +115,9 @@ class Connection(object):
 				else:
 					n += ret
 					ok = True
+			except socket.timeout as e:
+				log.error("%s: send: %s", self, e)
+				timedout = True
 			except socket.error as e:
 				if e.errno == errno.EAGAIN:
 					continue
