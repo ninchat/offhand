@@ -31,35 +31,53 @@ func readPacketShortMessageLength(r io.Reader) (shortMessageLength uint8, err er
 	return
 }
 
-func readUnicastPacketChannelIds(r io.Reader, traits ChannelTraits) (ids []ChannelId, err error) {
+func readUnicastPacketChannelIds(r io.Reader, channelIdSize int) (ids []ChannelId, err error) {
 	ids = make([]ChannelId, 1)
-	if traits != nil {
-		err = traits.CreateAndReadIds(ids, r)
+
+	if channelIdSize > 0 {
+		buf := make([]byte, channelIdSize)
+
+		if _, err = io.ReadFull(r, buf); err != nil {
+			return
+		}
+
+		ids[0] = ChannelId(buf)
 	}
+
 	return
 }
 
-func readMulticastPacketChannelIds(r *alignReader, traits ChannelTraits, maxCount int) (ids []ChannelId, err error) {
+func readMulticastPacketChannelIds(r *alignReader, channelIdSize int, maxCount int) (ids []ChannelId, err error) {
 	if err = r.Pad(2); err != nil {
 		return
 	}
 
-	var count uint32
+	var wireCount uint32
 
-	if err = binary.Read(r, binary.LittleEndian, &count); err != nil {
+	if err = binary.Read(r, binary.LittleEndian, &wireCount); err != nil {
 		return
 	}
 
-	if count > uint32(maxCount) {
-		err = fmt.Errorf("multicast count %d exceeds limit %d", count, maxCount)
+	if wireCount > uint32(maxCount) {
+		err = fmt.Errorf("multicast count %d exceeds limit %d", wireCount, maxCount)
 		return
 	}
 
+	count := int(wireCount)
 	ids = make([]ChannelId, count)
 
-	if traits != nil {
-		err = traits.CreateAndReadIds(ids, r)
+	if channelIdSize > 0 {
+		buf := make([]byte, channelIdSize*count)
+
+		if _, err = io.ReadFull(r, buf); err != nil {
+			return
+		}
+
+		for i := 0; i < count; i++ {
+			ids[i] = ChannelId(buf[channelIdSize*i : channelIdSize*(i+1)])
+		}
 	}
+
 	return
 }
 

@@ -69,14 +69,6 @@ func (e *Endpoint) init() (err error) {
 		return
 	}
 
-	if err = e.OutgoingOptions.init(); err != nil {
-		return
-	}
-
-	if err = e.IncomingOptions.init(); err != nil {
-		return
-	}
-
 	if e.MaxMulticastCount == 0 {
 		e.MaxMulticastCount = DefaultMaxMulticastCount
 	}
@@ -369,9 +361,9 @@ func (ec *endpointConnector) connectLoop() {
 			close(ec.link.IncomingChannels)
 		}
 
-		ec.link.xmitIncoming.Foreach(func(channel *IncomingChannel) {
+		for _, channel := range ec.link.xmitIncoming {
 			channel.close()
-		})
+		}
 	} else {
 		for _ = range connClosed {
 		}
@@ -630,12 +622,12 @@ func (el *endpointListener) finishHandshake(c net.Conn, acceptTime time.Time, r 
 		return
 	}
 
-	if config.ConnectorChannelIdSize != el.endpoint.IncomingOptions.idSize() {
+	if config.ConnectorChannelIdSize != byte(el.endpoint.IncomingOptions.IdSize) {
 		err = fmt.Errorf("incompatible incoming channel id size %d from connector", config.ConnectorChannelIdSize)
 		return
 	}
 
-	if config.ListenerChannelIdSize != el.endpoint.OutgoingOptions.idSize() {
+	if config.ListenerChannelIdSize != byte(el.endpoint.OutgoingOptions.IdSize) {
 		err = fmt.Errorf("incompatible outgoing channel id size %d from connector", config.ListenerChannelIdSize)
 		return
 	}

@@ -28,7 +28,7 @@ func TestEndpointPairWithChannels(t *testing.T) {
 	go func() {
 		e := Endpoint{
 			IncomingOptions: ChannelOptions{
-				Traits: Uint64ChannelTraits,
+				IdSize: 8,
 			},
 			Links:            make(chan *Link, 1),
 			Logger:           TestLogger,
@@ -109,7 +109,7 @@ func TestEndpointPairWithChannels(t *testing.T) {
 	go func() {
 		e := Endpoint{
 			OutgoingOptions: ChannelOptions{
-				Traits: Uint64ChannelTraits,
+				IdSize: 8,
 			},
 			Logger:            TestLogger,
 			Stats:             &connectStats,
@@ -126,7 +126,7 @@ func TestEndpointPairWithChannels(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		channel := l.OutgoingChannel(uint64(555))
+		channel := l.OutgoingChannel(MakeChannelId(uint64(555)))
 
 		var deadline time.Time
 
@@ -441,7 +441,7 @@ func TestDialEndpointReceive(t *testing.T) {
 
 	e := &Endpoint{
 		IncomingOptions: ChannelOptions{
-			Traits: Uint16ChannelTraits,
+			IdSize: 2,
 		},
 		Links:  make(chan *Link),
 		Logger: TestLogger,
@@ -560,7 +560,7 @@ func TestListenEndpointReceive(t *testing.T) {
 
 	e := &Endpoint{
 		IncomingOptions: ChannelOptions{
-			Traits: Byte2ChannelTraits,
+			IdSize: 2,
 		},
 		Links:  make(chan *Link),
 		Logger: TestLogger,

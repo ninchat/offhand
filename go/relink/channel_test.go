@@ -1,13 +1,23 @@
 package relink
 
 import (
+	"bytes"
+	"encoding/binary"
 	"testing"
 )
+
+func MakeChannelId(value interface{}) ChannelId {
+	var buf bytes.Buffer
+	if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+		panic(err)
+	}
+	return ChannelId(buf.Bytes())
+}
 
 func TestOutgoingChannelConsumed(t *testing.T) {
 	t.Log("NO MESSAGES")
 
-	c := newOutgoingChannel(nil, nil)
+	c := newOutgoingChannel(nil, noChannelId)
 
 	for _, n := range []uint32{0xfffffffe, 0, 1} {
 		if _, err := c.onConsumed(n); err != nil {
@@ -19,7 +29,7 @@ func TestOutgoingChannelConsumed(t *testing.T) {
 
 	t.Log("ONE MESSAGE")
 
-	c = newOutgoingChannel(nil, nil)
+	c = newOutgoingChannel(nil, noChannelId)
 	c.putMessage(new(outgoingMessage), 100)
 	c.getSender()
 
@@ -41,7 +51,7 @@ func TestOutgoingChannelConsumed(t *testing.T) {
 
 	t.Log("MANY MESSAGES")
 
-	c = newOutgoingChannel(nil, nil)
+	c = newOutgoingChannel(nil, noChannelId)
 	for i := 0; i < 10; i++ {
 		c.putMessage(new(outgoingMessage), 100)
 	}
@@ -65,7 +75,7 @@ func TestOutgoingChannelConsumed(t *testing.T) {
 
 	t.Log("RANGE WRAP-AROUND")
 
-	c = newOutgoingChannel(nil, nil)
+	c = newOutgoingChannel(nil, noChannelId)
 	c.messageConsumed = uint32(0xffffffff - 20) // cheat
 	for i := 0; i < 40; i++ {
 		c.putMessage(new(outgoingMessage), 100)

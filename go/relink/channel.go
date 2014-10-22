@@ -2,75 +2,24 @@ package relink
 
 import (
 	"fmt"
-	"io"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-// ChannelId is a primitive type which is determined by ChannelTraits.
-type ChannelId interface{}
-
-// ChannelMap wraps a map indexed with a ChannelId implementation.
-type ChannelMap interface {
-	// Insert adds an id to the map.
-	Insert(ChannelId, interface{})
-
-	// Lookup finds an id in the map.
-	Lookup(ChannelId) interface{}
-
-	// Delete removes an id from the map.
-	Delete(ChannelId)
-
-	// Length gets the number of items in the map.
-	Length() int
-
-	// Foreach calls a function for each item.
-	Foreach(func(ChannelId, interface{}))
-}
-
-// ChannelTraits provides operations for a concrete channel id type.
-type ChannelTraits interface {
-	// IdSize returns the size of ChannelId's underlying type in bytes.
-	IdSize() int
-
-	// CreateMap allocates a new ChannelMap.
-	CreateMap() ChannelMap
-
-	// CreateAndReadIds allocates one or more ChannelIds and fills them.
-	CreateAndReadIds(ids []ChannelId, r io.Reader) error
-}
-
 // ChannelOptions specifies protocol options for single transport direction.
 type ChannelOptions struct {
-	Transactions bool          // sender commits messages
-	Traits       ChannelTraits // specifies the channel id size
+	Transactions bool // sender commits messages
+	IdSize       int  // specifies the channel id array length
 }
 
-func (o *ChannelOptions) init() (err error) {
-	if o.Traits != nil {
-		idSize := o.Traits.IdSize()
+// ChannelId represents a fixed-length sequence of bytes.  The length is
+// determined by ChannelOptions.  The only supported operations on this type
+// are ChannelId([]byte) and []byte(ChannelId).
+type ChannelId string
 
-		if idSize < 0 || idSize > 255 {
-			return fmt.Errorf("channel id size %d not in range [0,255]", idSize)
-		}
-
-		if idSize == 0 {
-			o.Traits = nil
-		}
-	}
-
-	return
-}
-
-func (o *ChannelOptions) idSize() (size uint8) {
-	if o.Traits != nil {
-		size = uint8(o.Traits.IdSize())
-	}
-
-	return
-}
+const noChannelId = ChannelId("")
 
 // OutgoingChannel
 type OutgoingChannel struct {
@@ -229,7 +178,7 @@ func (c *OutgoingChannel) onReceived(sequence uint32) (enqueue bool, err error) 
 		min := c.messageConsumed + uint32(c.messagesReceived)
 		max := c.messageConsumed + uint32(c.messagesSent)
 
-		if c.Id == nil {
+		if c.Id == noChannelId {
 			err = fmt.Errorf("sequence %d received ack out of modular range [%d,%d]", sequence, min, max)
 		} else {
 			err = fmt.Errorf("sequence %d received ack out of modular range [%d,%d] on channel %v", sequence, min, max, c.Id)
@@ -277,7 +226,7 @@ func (c *OutgoingChannel) onConsumed(sequence uint32) (enqueue bool, err error) 
 	}
 
 	if logicalAck < logicalLastAcked || logicalAck > logicalLastSent {
-		if c.Id == nil {
+		if c.Id == noChannelId {
 			err = fmt.Errorf("sequence %d consumed ack out of modular range [%d,%d]", sequence, lastAcked, lastSent)
 		} else {
 			err = fmt.Errorf("sequence %d consumed ack out of modular range [%d,%d] on channel %v", sequence, lastAcked, lastSent, c.Id)
@@ -356,9 +305,9 @@ type outgoingSender struct {
 	close    bool
 }
 
-func (s *outgoingSender) sendPackets(w *alignWriter, traits ChannelTraits, ids []ChannelId, sentPackets, sentMessages *int) (err error) {
+func (s *outgoingSender) sendPackets(w *alignWriter, channelIdSize int, ids []ChannelId, sentPackets, sentMessages *int) (err error) {
 	for _, om := range s.messages {
-		if err = writeMessagePacket(w, traits, ids, om.Message); err != nil {
+		if err = writeMessagePacket(w, channelIdSize, ids, om.Message); err != nil {
 			return
 		}
 	}
@@ -367,7 +316,7 @@ func (s *outgoingSender) sendPackets(w *alignWriter, traits ChannelTraits, ids [
 	(*sentMessages) += len(s.messages)
 
 	if s.close {
-		if err = writeChannelOpPacket(w, traits, ids, protocolChannelOpClose); err != nil {
+		if err = writeChannelOpPacket(w, channelIdSize, ids, protocolChannelOpClose); err != nil {
 			return
 		}
 
@@ -520,7 +469,7 @@ func (c *IncomingChannel) bufferLoop(bufferSize int) {
 			min := c.messageConsumed
 			max := min + uint32(delivered)
 
-			if c.Id == nil {
+			if c.Id == noChannelId {
 				c.Link.Endpoint.Logger.Printf("%v: consumed sequence %d out of modular range [%d,%d]", c.Link, sequence, min, max)
 			} else {
 				c.Link.Endpoint.Logger.Printf("%v: consumed sequence %d out of modular range [%d,%d] on channel %v", c.Link, sequence, min, max, c.Id)
@@ -672,9 +621,9 @@ type incomingSender struct {
 	closed bool
 }
 
-func (s *incomingSender) sendPackets(w *alignWriter, traits ChannelTraits, ids []ChannelId, sentPackets *int) (err error) {
+func (s *incomingSender) sendPackets(w *alignWriter, channelIdSize int, ids []ChannelId, sentPackets *int) (err error) {
 	if s.received {
-		if err = writeSequenceAckPacket(w, traits, ids, protocolSequenceAckReceived, s.receivedSequence); err != nil {
+		if err = writeSequenceAckPacket(w, channelIdSize, ids, protocolSequenceAckReceived, s.receivedSequence); err != nil {
 			return
 		}
 
@@ -682,7 +631,7 @@ func (s *incomingSender) sendPackets(w *alignWriter, traits ChannelTraits, ids [
 	}
 
 	if s.consumed {
-		if err = writeSequenceAckPacket(w, traits, ids, protocolSequenceAckConsumed, s.consumedSequence); err != nil {
+		if err = writeSequenceAckPacket(w, channelIdSize, ids, protocolSequenceAckConsumed, s.consumedSequence); err != nil {
 			return
 		}
 
@@ -690,7 +639,7 @@ func (s *incomingSender) sendPackets(w *alignWriter, traits ChannelTraits, ids [
 	}
 
 	if s.closed {
-		if err = writeChannelAckPacket(w, traits, ids, protocolChannelAckClosed); err != nil {
+		if err = writeChannelAckPacket(w, channelIdSize, ids, protocolChannelAckClosed); err != nil {
 			return
 		}
 
@@ -698,105 +647,4 @@ func (s *incomingSender) sendPackets(w *alignWriter, traits ChannelTraits, ids [
 	}
 
 	return
-}
-
-// outgoingChannelMap adapts ChannelMap for *OutgoingChannel values.
-type outgoingChannelMap struct {
-	impl ChannelMap
-}
-
-func (m outgoingChannelMap) Insert(id ChannelId, c *OutgoingChannel) {
-	m.impl.Insert(id, c)
-}
-
-func (m outgoingChannelMap) Lookup(id ChannelId) (c *OutgoingChannel) {
-	if x := m.impl.Lookup(id); x != nil {
-		c = x.(*OutgoingChannel)
-	}
-
-	return
-}
-
-func (m outgoingChannelMap) Delete(id ChannelId) {
-	m.impl.Delete(id)
-}
-
-func (m outgoingChannelMap) Length() int {
-	return m.impl.Length()
-}
-
-func (m outgoingChannelMap) Foreach(f func(*OutgoingChannel)) {
-	m.impl.Foreach(func(id ChannelId, x interface{}) {
-		f(x.(*OutgoingChannel))
-	})
-}
-
-// incomingChannelMap adapts ChannelMap for *IncomingChannel values.
-type incomingChannelMap struct {
-	impl ChannelMap
-}
-
-func (m incomingChannelMap) Insert(id ChannelId, c *IncomingChannel) {
-	m.impl.Insert(id, c)
-}
-
-func (m incomingChannelMap) Lookup(id ChannelId) (c *IncomingChannel) {
-	if x := m.impl.Lookup(id); x != nil {
-		c = x.(*IncomingChannel)
-	}
-
-	return
-}
-
-func (m incomingChannelMap) Delete(id ChannelId) {
-	m.impl.Delete(id)
-}
-
-func (m incomingChannelMap) Length() int {
-	return m.impl.Length()
-}
-
-func (m incomingChannelMap) Foreach(f func(*IncomingChannel)) {
-	m.impl.Foreach(func(id ChannelId, x interface{}) {
-		f(x.(*IncomingChannel))
-	})
-}
-
-// singleChannelMap always finds the same value, until it loses it.
-type singleChannelMap struct {
-	value interface{}
-}
-
-func (m *singleChannelMap) Insert(id ChannelId, value interface{}) {
-	panic("singleChannelMap.Insert called")
-}
-
-func (m *singleChannelMap) Lookup(id ChannelId) interface{} {
-	if id != nil {
-		panic("non-nil ChannelId conflicts with ChannelOptions")
-	}
-
-	return m.value
-}
-
-func (m *singleChannelMap) Delete(id ChannelId) {
-	if id != nil {
-		panic("singleChannelMap.Delete called with non-nil id")
-	}
-
-	m.value = nil
-}
-
-func (m *singleChannelMap) Length() (n int) {
-	if m.value != nil {
-		n = 1
-	}
-
-	return
-}
-
-func (m *singleChannelMap) Foreach(f func(ChannelId, interface{})) {
-	if m.value != nil {
-		f(nil, m.value)
-	}
 }

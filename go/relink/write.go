@@ -2,6 +2,7 @@ package relink
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 )
 
@@ -13,40 +14,40 @@ func writeGeneralPacket(w *alignWriter, packetType uint8) (err error) {
 	return w.Align(8)
 }
 
-func writeChannelOpPacket(w *alignWriter, traits ChannelTraits, ids []ChannelId, packetType uint8) error {
-	return writeChannelPacket(w, traits, ids, protocolFormatChannelOp, packetType)
+func writeChannelOpPacket(w *alignWriter, channelIdSize int, ids []ChannelId, packetType uint8) error {
+	return writeChannelPacket(w, channelIdSize, ids, protocolFormatChannelOp, packetType)
 }
 
-func writeChannelAckPacket(w *alignWriter, traits ChannelTraits, ids []ChannelId, packetType uint8) error {
-	return writeChannelPacket(w, traits, ids, protocolFormatChannelAck, packetType)
+func writeChannelAckPacket(w *alignWriter, channelIdSize int, ids []ChannelId, packetType uint8) error {
+	return writeChannelPacket(w, channelIdSize, ids, protocolFormatChannelAck, packetType)
 }
 
-func writeChannelPacket(w *alignWriter, traits ChannelTraits, ids []ChannelId, format, packetType uint8) (err error) {
+func writeChannelPacket(w *alignWriter, channelIdSize int, ids []ChannelId, format, packetType uint8) (err error) {
 	if err = writePacketHeader(w, true, len(ids) != 1, format, packetType, 0); err != nil {
 		return
 	}
 
-	if err = writePacketChannelIds(w, traits, ids); err != nil {
+	if err = writePacketChannelIds(w, channelIdSize, ids); err != nil {
 		return
 	}
 
 	return w.Align(8)
 }
 
-func writeSequenceOpPacket(w *alignWriter, traits ChannelTraits, ids []ChannelId, packetType uint8, sequence uint32) error {
-	return writeSequencePacket(w, traits, ids, protocolFormatSequenceOp, packetType, sequence)
+func writeSequenceOpPacket(w *alignWriter, channelIdSize int, ids []ChannelId, packetType uint8, sequence uint32) error {
+	return writeSequencePacket(w, channelIdSize, ids, protocolFormatSequenceOp, packetType, sequence)
 }
 
-func writeSequenceAckPacket(w *alignWriter, traits ChannelTraits, ids []ChannelId, packetType uint8, sequence uint32) error {
-	return writeSequencePacket(w, traits, ids, protocolFormatSequenceAck, packetType, sequence)
+func writeSequenceAckPacket(w *alignWriter, channelIdSize int, ids []ChannelId, packetType uint8, sequence uint32) error {
+	return writeSequencePacket(w, channelIdSize, ids, protocolFormatSequenceAck, packetType, sequence)
 }
 
-func writeSequencePacket(w *alignWriter, traits ChannelTraits, ids []ChannelId, format, packetType uint8, sequence uint32) (err error) {
+func writeSequencePacket(w *alignWriter, channelIdSize int, ids []ChannelId, format, packetType uint8, sequence uint32) (err error) {
 	if err = writePacketHeader(w, true, len(ids) != 1, format, packetType, 0); err != nil {
 		return
 	}
 
-	if err = writePacketChannelIds(w, traits, ids); err != nil {
+	if err = writePacketChannelIds(w, channelIdSize, ids); err != nil {
 		return
 	}
 
@@ -61,7 +62,7 @@ func writeSequencePacket(w *alignWriter, traits ChannelTraits, ids []ChannelId, 
 	return w.Align(8)
 }
 
-func writeMessagePacket(w *alignWriter, traits ChannelTraits, ids []ChannelId, m Message) (err error) {
+func writeMessagePacket(w *alignWriter, channelIdSize int, ids []ChannelId, m Message) (err error) {
 	var flags uint8
 	var shortLength uint8
 
@@ -82,7 +83,7 @@ func writeMessagePacket(w *alignWriter, traits ChannelTraits, ids []ChannelId, m
 		return
 	}
 
-	if err = writePacketChannelIds(w, traits, ids); err != nil {
+	if err = writePacketChannelIds(w, channelIdSize, ids); err != nil {
 		return
 	}
 
@@ -150,7 +151,7 @@ func writePacketHeader(w *alignWriter, channel, multicast bool, format, x uint8,
 	return
 }
 
-func writePacketChannelIds(w *alignWriter, traits ChannelTraits, ids []ChannelId) (err error) {
+func writePacketChannelIds(w *alignWriter, channelIdSize int, ids []ChannelId) (err error) {
 	if len(ids) != 1 {
 		if err = w.Pad(2); err != nil {
 			return
@@ -161,9 +162,14 @@ func writePacketChannelIds(w *alignWriter, traits ChannelTraits, ids []ChannelId
 		}
 	}
 
-	if traits != nil {
+	if channelIdSize > 0 {
 		for _, id := range ids {
-			if err = binary.Write(w, binary.LittleEndian, id); err != nil {
+			buf := []byte(id)
+			if len(buf) != channelIdSize {
+				panic(fmt.Errorf("bad channel id size %d (expected %d)", len(buf), channelIdSize))
+			}
+
+			if _, err = w.Write(buf); err != nil {
 				return
 			}
 		}

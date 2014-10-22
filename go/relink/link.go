@@ -46,8 +46,8 @@ type Link struct {
 	xmitPeerResuming bool
 	xmitSelfShutdown bool
 	xmitPeerShutdown bool
-	xmitOutgoing     outgoingChannelMap
-	xmitIncoming     incomingChannelMap
+	xmitOutgoing     map[ChannelId]*OutgoingChannel
+	xmitIncoming     map[ChannelId]*IncomingChannel
 
 	connLock  sync.Mutex
 	conn      net.Conn
@@ -70,28 +70,22 @@ func newLink(e *Endpoint, id linkId, c net.Conn) (l *Link) {
 		id:               id,
 		xmitNotify:       make(chan bool, 1),
 		xmitSelfResuming: -1,
+		xmitOutgoing:     make(map[ChannelId]*OutgoingChannel),
+		xmitIncoming:     make(map[ChannelId]*IncomingChannel),
 		conn:             c,
 	}
 
-	var outgoingMap ChannelMap
-	var incomingMap ChannelMap
-
-	if e.OutgoingOptions.Traits != nil {
-		outgoingMap = e.OutgoingOptions.Traits.CreateMap()
-	} else {
-		outgoingMap = &singleChannelMap{newOutgoingChannel(l, nil)}
+	if e.OutgoingOptions.IdSize == 0 {
+		l.xmitOutgoing[noChannelId] = newOutgoingChannel(l, noChannelId)
 	}
 
-	if e.IncomingOptions.Traits != nil {
+	if e.IncomingOptions.IdSize > 0 {
 		l.IncomingChannels = make(chan *IncomingChannel)
-		incomingMap = e.IncomingOptions.Traits.CreateMap()
 	} else {
 		l.IncomingMessages = make(chan *IncomingMessage)
-		incomingMap = &singleChannelMap{newIncomingChannel(l, nil, l.IncomingMessages)}
+		l.xmitIncoming[noChannelId] = newIncomingChannel(l, noChannelId, l.IncomingMessages)
 	}
 
-	l.xmitOutgoing = outgoingChannelMap{outgoingMap}
-	l.xmitIncoming = incomingChannelMap{incomingMap}
 	l.connReset.L = &l.connLock
 
 	return
@@ -161,15 +155,15 @@ func (l *Link) Close() (err error) {
 		l.xmitClosed = true
 		t.notify = true
 
-		if l.Endpoint.OutgoingOptions.Traits != nil {
-			l.xmitOutgoing.Foreach(func(channel *OutgoingChannel) {
+		if l.Endpoint.OutgoingOptions.IdSize > 0 {
+			for _, channel := range l.xmitOutgoing {
 				if enqueue := channel.close(); enqueue {
 					t.enqueue(channel)
 				}
-			})
+			}
 		} else {
-			if channel := l.xmitOutgoing.Lookup(nil); channel.isDrained() {
-				l.xmitOutgoing.Delete(nil)
+			if channel := l.xmitOutgoing[noChannelId]; channel.isDrained() {
+				delete(l.xmitOutgoing, noChannelId)
 			}
 		}
 	}
@@ -202,7 +196,7 @@ func (l *Link) waitClose() {
 // TODO: move the waitAck functionality to a separate WaitConsumed method?
 //       Send should return a ticket which is passed to WaitConsumed?
 func (l *Link) Send(payload Message, waitAck bool, deadline time.Time) (sent bool, err error) {
-	return l.send(nil, payload, waitAck, deadline)
+	return l.send(noChannelId, payload, waitAck, deadline)
 }
 
 func (l *Link) send(id ChannelId, payload Message, waitAck bool, deadline time.Time) (sent bool, err error) {
@@ -243,10 +237,10 @@ func (l *Link) send(id ChannelId, payload Message, waitAck bool, deadline time.T
 		if l.xmitClosed {
 			err = ErrLinkClosed
 		} else {
-			channel = l.xmitOutgoing.Lookup(id)
+			channel = l.xmitOutgoing[id]
 			if channel == nil {
 				channel = newOutgoingChannel(l, id)
-				l.xmitOutgoing.Insert(id, channel)
+				l.xmitOutgoing[id] = channel
 				t.enqueue(channel)
 			}
 
@@ -309,14 +303,14 @@ func (l *Link) send(id ChannelId, payload Message, waitAck bool, deadline time.T
 
 // Consume
 func (l *Link) Consume(seq MessageSequence) {
-	if channel := l.xmitIncoming.Lookup(nil); channel != nil {
+	if channel := l.xmitIncoming[noChannelId]; channel != nil {
 		channel.Consume(seq)
 	}
 }
 
 // ConsumeAndRewind
 func (l *Link) ConsumeAndRewind(seq MessageSequence) {
-	if channel := l.xmitIncoming.Lookup(nil); channel != nil {
+	if channel := l.xmitIncoming[noChannelId]; channel != nil {
 		channel.ConsumeAndRewind(seq)
 	}
 }
@@ -325,13 +319,13 @@ func (l *Link) ConsumeAndRewind(seq MessageSequence) {
 func (l *Link) OutgoingChannel(id ChannelId) (c *OutgoingChannel) {
 	t := l.updateTransmission()
 
-	c = l.xmitOutgoing.Lookup(id)
+	c = l.xmitOutgoing[id]
 	if c == nil {
 		if l.xmitClosed {
 			c = newClosedOutgoingChannel(l, id)
 		} else {
 			c = newOutgoingChannel(l, id)
-			l.xmitOutgoing.Insert(id, c)
+			l.xmitOutgoing[id] = c
 		}
 	}
 
@@ -344,10 +338,10 @@ func (l *Link) OutgoingChannel(id ChannelId) (c *OutgoingChannel) {
 func (l *Link) IncomingChannel(id ChannelId) (c *IncomingChannel) {
 	t := l.updateTransmission()
 
-	c = l.xmitIncoming.Lookup(id)
+	c = l.xmitIncoming[id]
 	if c == nil {
 		c = newIncomingChannel(l, id, make(chan *IncomingMessage))
-		l.xmitIncoming.Insert(id, c)
+		l.xmitIncoming[id] = c
 	}
 
 	t.done()
@@ -374,13 +368,13 @@ func (l *Link) lost(err error) {
 
 	l.xmitClosed = true
 
-	l.xmitOutgoing.Foreach(func(channel *OutgoingChannel) {
+	for _, channel := range l.xmitOutgoing {
 		channel.lost(err)
-	})
+	}
 
-	l.xmitIncoming.Foreach(func(channel *IncomingChannel) {
+	for _, channel := range l.xmitIncoming {
 		channel.close()
-	})
+	}
 
 	t.done()
 }
@@ -462,26 +456,26 @@ func (l *Link) transferLoop(connClosed chan<- bool) {
 			close(l.IncomingChannels)
 		}
 
-		l.xmitIncoming.Foreach(func(channel *IncomingChannel) {
+		for _, channel := range l.xmitIncoming {
 			channel.close()
-		})
+		}
 	}
 }
 
 func (l *Link) resume() {
 	t := l.updateTransmission()
 
-	l.xmitOutgoing.Foreach(func(channel *OutgoingChannel) {
+	for _, channel := range l.xmitOutgoing {
 		channel.beginResume()
-	})
+	}
 
-	l.xmitIncoming.Foreach(func(channel *IncomingChannel) {
+	for _, channel := range l.xmitIncoming {
 		if !channel.queued {
 			t.enqueue(channel)
 		}
-	})
+	}
 
-	l.xmitSelfResuming = l.xmitIncoming.Length()
+	l.xmitSelfResuming = len(l.xmitIncoming)
 	l.xmitPeerResuming = true
 
 	t.done()
@@ -589,7 +583,7 @@ func (l *Link) sendPackets(c net.Conn, w *alignWriter, generalLoop <-chan uint8)
 				sendIncoming, incomingSender, closed = channel.getSender(resuming)
 
 				if closed {
-					l.xmitIncoming.Delete(id)
+					delete(l.xmitIncoming, id)
 				}
 			}
 
@@ -601,7 +595,7 @@ func (l *Link) sendPackets(c net.Conn, w *alignWriter, generalLoop <-chan uint8)
 			}
 		}
 
-		sendShutdown := l.xmitClosed && (l.xmitOutgoing.Length() == 0) && !l.xmitSelfShutdown
+		sendShutdown := l.xmitClosed && (len(l.xmitOutgoing) == 0) && !l.xmitSelfShutdown
 
 		l.xmitLock.Unlock()
 
@@ -610,13 +604,13 @@ func (l *Link) sendPackets(c net.Conn, w *alignWriter, generalLoop <-chan uint8)
 		}
 
 		if sendOutgoing {
-			if err = outgoingSender.sendPackets(w, l.Endpoint.OutgoingOptions.Traits, []ChannelId{id}, &sentPackets, &sentMessages); err != nil {
+			if err = outgoingSender.sendPackets(w, l.Endpoint.OutgoingOptions.IdSize, []ChannelId{id}, &sentPackets, &sentMessages); err != nil {
 				return
 			}
 		}
 
 		if sendIncoming {
-			if err = incomingSender.sendPackets(w, l.Endpoint.IncomingOptions.Traits, []ChannelId{id}, &sentPackets); err != nil {
+			if err = incomingSender.sendPackets(w, l.Endpoint.IncomingOptions.IdSize, []ChannelId{id}, &sentPackets); err != nil {
 				return
 			}
 		}
@@ -771,20 +765,20 @@ func (l *Link) receiveLoop(c net.Conn, generalLoop chan<- uint8) (err error) {
 				}
 			}
 
-			var traits ChannelTraits
+			var channelIdSize int
 
 			if (format & protocolFormatFlagReceiveChannel) != 0 {
-				traits = l.Endpoint.OutgoingOptions.Traits
+				channelIdSize = l.Endpoint.OutgoingOptions.IdSize
 			} else {
-				traits = l.Endpoint.IncomingOptions.Traits
+				channelIdSize = l.Endpoint.IncomingOptions.IdSize
 			}
 
 			var ids []ChannelId
 
 			if multicast {
-				ids, err = readMulticastPacketChannelIds(r, traits, l.Endpoint.MaxMulticastCount)
+				ids, err = readMulticastPacketChannelIds(r, channelIdSize, l.Endpoint.MaxMulticastCount)
 			} else {
-				ids, err = readUnicastPacketChannelIds(r, traits)
+				ids, err = readUnicastPacketChannelIds(r, channelIdSize)
 			}
 
 			if err != nil {
@@ -842,7 +836,7 @@ func (l *Link) receiveGeneralPacket(c net.Conn, packetType uint8, generalLoop ch
 
 		var remove []ChannelId
 
-		l.xmitOutgoing.Foreach(func(channel *OutgoingChannel) {
+		for _, channel := range l.xmitOutgoing {
 			closed, enqueue, e := channel.endResume()
 			if e != nil {
 				if err != nil {
@@ -854,10 +848,10 @@ func (l *Link) receiveGeneralPacket(c net.Conn, packetType uint8, generalLoop ch
 			} else if enqueue {
 				t.enqueue(channel)
 			}
-		})
+		}
 
 		for _, id := range remove {
-			l.xmitOutgoing.Delete(id)
+			delete(l.xmitOutgoing, id)
 		}
 
 		l.xmitPeerResuming = false
@@ -877,9 +871,9 @@ func (l *Link) receiveGeneralPacket(c net.Conn, packetType uint8, generalLoop ch
 				close(l.IncomingChannels)
 			}
 
-			l.xmitIncoming.Foreach(func(channel *IncomingChannel) {
+			for _, channel := range l.xmitIncoming {
 				channel.close()
-			})
+			}
 		}
 
 		t.done()
@@ -906,7 +900,7 @@ func (l *Link) receiveChannelOpPacket(r io.Reader, ids []ChannelId, op uint8) (e
 
 		case protocolChannelOpClose:
 			t := l.updateTransmission()
-			if channel := l.xmitIncoming.Lookup(id); channel != nil {
+			if channel := l.xmitIncoming[id]; channel != nil {
 				channel.close()
 			}
 			t.done()
@@ -927,7 +921,7 @@ func (l *Link) receiveChannelAckPacket(r io.Reader, ids []ChannelId, ack uint8) 
 	for _, id := range ids {
 		t := l.updateTransmission()
 
-		if channel := l.xmitOutgoing.Lookup(id); channel != nil {
+		if channel := l.xmitOutgoing[id]; channel != nil {
 			var enqueue bool
 
 			switch ack {
@@ -937,8 +931,8 @@ func (l *Link) receiveChannelAckPacket(r io.Reader, ids []ChannelId, ack uint8) 
 			case protocolChannelAckConsumed:
 				enqueue, err = channel.onConsumedNext()
 
-				if l.xmitClosed && l.Endpoint.OutgoingOptions.Traits == nil && channel.isDrained() {
-					l.xmitOutgoing.Delete(id)
+				if l.xmitClosed && l.Endpoint.OutgoingOptions.IdSize == 0 && channel.isDrained() {
+					delete(l.xmitOutgoing, id)
 				}
 
 			case protocolChannelAckCommitted:
@@ -948,10 +942,10 @@ func (l *Link) receiveChannelAckPacket(r io.Reader, ids []ChannelId, ack uint8) 
 				/* TODO */ err = errors.New("channel uncommited-ack not implemented")
 
 			case protocolChannelAckClosed:
-				l.xmitOutgoing.Delete(id)
+				delete(l.xmitOutgoing, id)
 				channel.signal()
 
-				if l.xmitClosed && l.xmitOutgoing.Length() == 0 {
+				if l.xmitClosed && len(l.xmitOutgoing) == 0 {
 					t.notify = true
 				}
 
@@ -962,7 +956,7 @@ func (l *Link) receiveChannelAckPacket(r io.Reader, ids []ChannelId, ack uint8) 
 			if err == nil && enqueue {
 				t.enqueue(channel)
 			}
-		} else if l.xmitPeerResuming && id != nil {
+		} else if l.xmitPeerResuming && id != noChannelId {
 			err = fmt.Errorf("peer claims to know nonexistent channel %v after reconnect", id)
 		}
 
@@ -1010,7 +1004,7 @@ func (l *Link) receiveSequenceAckPacket(r *alignReader, ids []ChannelId, ack uin
 	for _, id := range ids {
 		t := l.updateTransmission()
 
-		if channel := l.xmitOutgoing.Lookup(id); channel != nil {
+		if channel := l.xmitOutgoing[id]; channel != nil {
 			var enqueue bool
 
 			switch ack {
@@ -1020,8 +1014,8 @@ func (l *Link) receiveSequenceAckPacket(r *alignReader, ids []ChannelId, ack uin
 			case protocolSequenceAckConsumed:
 				enqueue, err = channel.onConsumed(sequence)
 
-				if l.xmitClosed && l.Endpoint.OutgoingOptions.Traits == nil && channel.isDrained() {
-					l.xmitOutgoing.Delete(id)
+				if l.xmitClosed && l.Endpoint.OutgoingOptions.IdSize == 0 && channel.isDrained() {
+					delete(l.xmitOutgoing, id)
 				}
 
 			case protocolSequenceAckCommitted:
@@ -1037,7 +1031,7 @@ func (l *Link) receiveSequenceAckPacket(r *alignReader, ids []ChannelId, ack uin
 			if err == nil && enqueue {
 				t.enqueue(channel)
 			}
-		} else if l.xmitPeerResuming && id != nil {
+		} else if l.xmitPeerResuming && id != noChannelId {
 			err = fmt.Errorf("peer claims to know nonexistent channel %v after reconnect", id)
 		}
 
@@ -1092,10 +1086,10 @@ func (l *Link) receiveMessagePacket(r *alignReader, ids []ChannelId, flags, shor
 
 		t := l.updateTransmission()
 
-		channel := l.xmitIncoming.Lookup(id)
+		channel := l.xmitIncoming[id]
 		if channel == nil {
 			channel = newIncomingChannel(l, id, make(chan *IncomingMessage))
-			l.xmitIncoming.Insert(id, channel)
+			l.xmitIncoming[id] = channel
 			channelCreated = true
 		}
 

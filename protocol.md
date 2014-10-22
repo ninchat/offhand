@@ -68,12 +68,12 @@ with the amount of padding depending on the preceding fields.
 When non-zero, a link id identifies a link within a listener instance.  Its
 value must be within the interval [1, 2^63[.
 
-If the connector sent an unknown or the zero-value link id (or the epoch has
+If the connector sent an unknown or zero-value link id (or the epoch has
 changed), the listener should reply with a new, unique link id.  Otherwise the
-listener should reply with an the connector's link id to acknowledge it.
+listener should reply with the connector's link id to acknowledge it.
 
 If the old link id required (see flags) but not known to the listener (or the
-epoch has changed), it should reply with the zero link id and disconnect.
+epoch has changed), it should reply with zero-value link id and disconnect.
 
 If the connector receives a new link id (or a new epoch), state specific to the
 old link id (if any) must be discarded, and messaging may start immediately.

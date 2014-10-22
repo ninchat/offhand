@@ -58,8 +58,8 @@ type handshakeConfig struct {
 
 func writeHandshakeConfig(w *alignWriter, connector, listener ChannelOptions, flags uint8) (err error) {
 	config := handshakeConfig{
-		ConnectorChannelIdSize: connector.idSize(),
-		ListenerChannelIdSize:  listener.idSize(),
+		ConnectorChannelIdSize: byte(connector.IdSize),
+		ListenerChannelIdSize:  byte(listener.IdSize),
 		Flags: flags,
 	}
 
