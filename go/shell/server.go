@@ -13,7 +13,7 @@ import (
 	"os/exec"
 	"time"
 
-	"../relink"
+	"../offhand"
 )
 
 func Server() {
@@ -61,13 +61,13 @@ func Server() {
 		os.Exit(1)
 	}
 
-	endpoint := &relink.Endpoint{
-		Links: make(chan *relink.Link),
+	endpoint := &offhand.Endpoint{
+		Links: make(chan *offhand.Link),
 	}
 
 	defer endpoint.Close()
 
-	if err := endpoint.Listen(listener, "relish"); err != nil {
+	if err := endpoint.Listen(listener, "shell"); err != nil {
 		log.Print(err)
 		os.Exit(1)
 	}
@@ -77,7 +77,7 @@ func Server() {
 	}
 }
 
-func HandleServerLink(link *relink.Link) {
+func HandleServerLink(link *offhand.Link) {
 	var stdin chan []byte
 	var stdout chan []byte
 
@@ -138,7 +138,7 @@ func HandleServerLink(link *relink.Link) {
 
 	for messages != nil || errors != nil || stdinLine != nil || stdout != nil {
 		var stdinActive chan<- []byte
-		var messagesActive <-chan *relink.IncomingMessage
+		var messagesActive <-chan *offhand.IncomingMessage
 
 		if stdinLine != nil {
 			stdinActive = stdin

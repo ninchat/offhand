@@ -1,5 +1,5 @@
-// Package relink implements the Relink protocol version 1.
-package relink
+// Package offhand implements the Offhand protocol version 1.
+package offhand
 
 // This file contains miscellaneous functions that don't fit elsewhere.
 

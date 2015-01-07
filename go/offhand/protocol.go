@@ -1,6 +1,6 @@
-package relink
+package offhand
 
-// The highest Relink protocol version supported by this package.
+// The highest Offhand protocol version supported by this package.
 const ProtocolVersion = 0
 
 const (

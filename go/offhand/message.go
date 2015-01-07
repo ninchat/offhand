@@ -1,4 +1,4 @@
-package relink
+package offhand
 
 import (
 	"math"
@@ -8,25 +8,25 @@ import (
 // Message has zero or more binary parts.
 type Message [][]byte
 
-// MessageSequence is opaque data which shouldn't be accessed directly.
-type MessageSequence uint32
+// IncomingMessageSequence is opaque data which shouldn't be accessed directly.
+type IncomingMessageSequence uint32
 
 // Add
-func (seq MessageSequence) Add(offset int) MessageSequence {
+func (seq IncomingMessageSequence) Add(offset int) IncomingMessageSequence {
 	if offset < 0 || offset > math.MaxUint32 {
 		panic("bad message sequence offset")
 	}
 
-	return MessageSequence(uint32(seq) + uint32(offset))
+	return IncomingMessageSequence(uint32(seq) + uint32(offset))
 }
 
 // Sub
-func (seq MessageSequence) Sub(offset int) MessageSequence {
+func (seq IncomingMessageSequence) Sub(offset int) IncomingMessageSequence {
 	if offset < 0 || offset > math.MaxUint32 {
 		panic("bad message sequence offset")
 	}
 
-	return MessageSequence(uint32(seq) - uint32(offset))
+	return IncomingMessageSequence(uint32(seq) - uint32(offset))
 }
 
 // outgoingMessage
@@ -39,15 +39,7 @@ type outgoingMessage struct {
 // IncomingMessage
 type IncomingMessage struct {
 	Message
-	Sequence MessageSequence
-
-	channel *IncomingChannel
-}
-
-// Consume
-func (im *IncomingMessage) Consume() Message {
-	im.channel.Consume(im.Sequence)
-	return im.Message
+	Sequence IncomingMessageSequence
 }
 
 // Sender

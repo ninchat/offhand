@@ -1,43 +1,123 @@
 
-Relink Protocol
-===============
+Offhand Protocol
+================
 
-This document specifies the Relink networking protocol version 0 (draft).
-
-The protocol can be layered on any bi-directional binary stream (e.g. TCP or
-TLS).  It consists of a handshake, followed by full-duplex packet exchange.
-
-All integer values are encoded in little-endian byte order on the wire (note:
-not in the network byte order).  Any unused bits or padding bytes must be sent
-as zero and ignored when received.  Any unused enumeration values must not be
-sent, and the connection should be terminated when one is received.
+This document specifies the Offhand network protocol version 1 (**DRAFT**).
 
 
-## 1. Handshake
+## 1. General
 
-"Connector" refers to the peer which initiated the connection, and "listener"
-to the peer which accepted the connection (e.g. has a well-known name).
-"Connector channel" and "listener channel" refer to the message streams sent by
-the respective peers.
+### 1.1. Introduction
 
-The peers exchange the following fields in the specified order (half-duplex):
+The protocol is intended for use in private networks, where the peers are
+controlled by trusted parties.  It can be layered on any bi-directional binary
+stream transport (e.g. TCP or TLS), and is specifically designed to cope with
+connection failures.
 
-     Sender     | Handshake field               | Size (bytes)
-    :-----------|:------------------------------|:------------------------
-     connector  | connector's version           | 1
-     _"_        | (padding)                     | 7
-     listener   | listener's version            | 1
-     _"_        | (padding)                     | 7
-     connector  | endpoint name length          | 1
-     _"_        | endpoint name text            | _endpoint name length_
-     _"_        | connector's channel id size   | 1
-     _"_        | listener's channel id size    | 1
-     _"_        | handshake flags               | 1
-     _"_        | (padding)                     | 0-7
-     _"_        | old epoch (or zero)           | 8
-     _"_        | old link id (or zero)         | 8
-     listener   | old or new epoch              | 8
-     _"_        | old or new link id (or zero)  | 8
+
+### 1.2. Glossary
+
+channel
+
+> A half-duplex message stream within a link.
+
+connection
+
+> Single data transfer session of the underlying transport mechanism.  E.g. a
+> TCP connection.
+
+connector
+
+> A peer which initiates connections.
+
+connector's channel
+
+> A message stream sent by a connector to a listener.
+
+epoch
+
+> The initialization time of a listener instance in microseconds since January
+> 1, 1970 UTC.
+
+link
+
+> Logical pairing of peers, spanning multiple connections.
+
+listener
+
+> A peer which accepts connections, probably at a well-known network address.
+
+listener instance
+
+> An Offhand application's runtime state, including current links.
+
+listener's channel
+
+> A stream of messages sent by a listener to a connector.
+
+message
+
+> High-level payload, consisting of multiple parts.
+
+peer
+
+> One of the two linked Offhand applications.
+
+sequence
+
+> Message identifier within a sliding window in a channel.
+
+transaction
+
+> Mechanism for ensuring the successful processing of messages (in addition to
+> the successful receiving of messages).
+
+
+### 1.3. Requirements terminology
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD",
+"SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be
+interpreted as described in [RFC 2119].
+
+
+### 1.4. Overall technical requirements
+
+All integer values (everything except variable-length data) are encoded in
+little-endian byte order on the wire (note: not in the network byte order).
+Unused bits and padding bytes MUST be sent as zero, and ignored when received.
+Unused enumeration or out-of-range values MUST NOT be sent, and the connection
+MUST be retired when such a value is received.
+
+Retiring a connection means that it MUST NOT be used to send packets, and it
+SHOULD be terminated.
+
+
+## 2. Handshake
+
+Both peers send handshake data immediately after a connection has been
+established.
+
+Fields sent by the connector:
+
+     Handshake field               | Size (bytes)
+    :------------------------------|:--------------
+     connector's version           | 1
+     (padding)                     | 3
+     handshake flags               | 1
+     (padding)                     | 1
+     connector's channel id size   | 1
+     listener's channel id size    | 1
+     old epoch (or zero)           | 8
+     old link id (or zero)         | 8
+
+Fields sent by the listener:
+
+     Handshake field               | Size (bytes)
+    :------------------------------|:--------------
+     listener's version            | 1
+     (padding)                     | 7
+     old or new epoch              | 8
+     old or new link id (or zero)  | 8
 
 Handshake flags:
 
@@ -47,67 +127,41 @@ Handshake flags:
         1 | listener's channel uses transactions
         2 | require old link id
 
-The connector sends the highest version number it supports, and the listener
-replies with the same or a lower version number.  If either peer doesn't
-support the other's version, the connection should be terminated.
-
-After a mutually supported protocol version has been negotiated, the connector
-sends the endpoint name, the flags, the channel id sizes, an epoch (zero by
-default) and a link id (zero by default).  If the listener doesn't know the
-endpoint name, or disagrees about the transaction flags or channel id sizes, it
-should terminate the connection.
-
-Endpoint names make hosting multiple services at the same address possible.
-The name must be valid UTF-8 (not null-terminated).
+A peer sends the highest version number it supports.  If the version numbers
+don't match, the connection MUST be retired.  If the listener disagrees about
+the transaction flags or channel id sizes, it MUST retire the connection.
 
 When non-zero, an epoch identifies a listener instance at a given location.  If
-it changes, it means that the link has been lost.  Its value is microseconds
-since January 1, 1970 UTC.  The epoch field is aligned to an 8-byte boundary,
-with the amount of padding depending on the preceding fields.
+it changes, it means that the link has been lost.
 
 When non-zero, a link id identifies a link within a listener instance.  Its
-value must be within the interval [1, 2^63[.
+value MUST be within the interval [1..2<sup>63</sup>[.
 
 If the connector sent an unknown or zero-value link id (or the epoch has
-changed), the listener should reply with a new, unique link id.  Otherwise the
-listener should reply with the connector's link id to acknowledge it.
+changed), the listener replies with a new, unique link id.  Otherwise the
+listener replies with the connector's link id to acknowledge it.
 
 If the old link id required (see flags) but not known to the listener (or the
-epoch has changed), it should reply with zero-value link id and disconnect.
+epoch has changed), it MUST reply with zero-value link id and retire the
+connection.
 
 If the connector receives a new link id (or a new epoch), state specific to the
-old link id (if any) must be discarded, and messaging may start immediately.
+old link id (if any) MUST be discarded, and messaging may start immediately.
 If the peers agree on an old link id, packet exchange may start, but messaging
-must not be started on a channel until it has been resumed.
+MUST NOT be started on a channel until it has been resumed.
 
-Wire format of the connector's transmission (with a 6-byte endpoint name):
-
-     0                   1                   2                   3
-     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-    +---------------+---------------+---------------+---------------+
-    |  connector's  |
-    |    version    |
-    +---------------+---------------+---------------+---------------+
-                                                                    |
-                                                                    |
-    +---------------+---------------+---------------+---------------+
+Wire format of the connector's transmission:
 
      0                   1                   2                   3
      0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
     +---------------+---------------+---------------+---------------+
-    |   endpoint    |                   endpoint
-    |  name length  |                   name text
+    |  connector's  |                                               |
+    |    version    |                                               |
     +---------------+---------------+---------------+---------------+
-                        (cont'd)                    |  connector's  |
-                                                    | channel size  |
+    |   handshake   |               |  connector's  |  listener's   |
+    |     flags     |               | channel size  | channel size  |
     +---------------+---------------+---------------+---------------+
-    |  listener's   |   handshake   |
-    | channel size  |     flags     |
-    +---------------+---------------+---------------+---------------+
-                                                                    |
-                                                                    |
-    +---------------+---------------+---------------+---------------+
-    |                            old epoch
+    |                           old epoch
     |
     +---------------+---------------+---------------+---------------+
                                  (cont'd)                           |
@@ -131,10 +185,6 @@ Wire format of the listener's transmission:
                                                                     |
                                                                     |
     +---------------+---------------+---------------+---------------+
-
-     0                   1                   2                   3
-     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-    +---------------+---------------+---------------+---------------+
     |                           old or new
     |                             epoch
     +---------------+---------------+---------------+---------------+
@@ -149,9 +199,9 @@ Wire format of the listener's transmission:
     +---------------+---------------+---------------+---------------+
 
 
-## 2. Packets
+## 3. Packets
 
-### 2.1. Packet header
+### 3.1. Packet header
 
 All packets start with the common packet header, and are aligned to an 8-byte
 boundary by padding at the end.
@@ -187,7 +237,7 @@ The packet format depends on the channel bit and the channel packet format:
   message packet configuration.
 
 
-### 2.2. General packet format
+### 3.2. General packet format
 
 One of the following packet types is stored in the packet format-specific data
 in the common packet header:
@@ -212,11 +262,11 @@ Wire format:
                                                                     |
     +---------------+---------------+---------------+---------------+
 
-The nop (no operation) packet consist of 8 zero bytes, so it can be used for
+The nop (no operation) packet consists of 8 zero bytes, so it can be used for
 additional padding between between packets.
 
 
-### 2.3. Channel packet formats
+### 3.3. Channel packet formats
 
 Unicast packets contain the following field:
 
@@ -240,11 +290,11 @@ If a channel id is specified multiple times, the message will be delivered
 multiple times to the channel.  This is possible also when channel id size is
 zero.
 
-The theoretical maximum number of multicast targets is 2^32-1, but
-implementations may impose a stricter limit.
+The theoretical maximum number of multicast targets is 2<sup>32</sup>-1, but
+implementations MAY impose a stricter limit.
 
 
-#### 2.3.1. Channel operation and acknowledgement packet format
+#### 3.3.1. Channel operation and acknowledgement packet format
 
 One of the following packet types is stored in the packet format-specific data
 in the common packet header:
@@ -280,7 +330,7 @@ Wire format (unicast, with a 2-byte channel id):
     +---------------+---------------+---------------+---------------+
 
 
-#### 2.3.2. Sequence operation and acknowledgement packet format
+#### 3.3.2. Sequence operation and acknowledgement packet format
 
 The sequence packets contain the following field:
 
@@ -328,7 +378,7 @@ Wire format (unicast, with an 8-byte channel id):
     +---------------+---------------+---------------+---------------+
 
 
-#### 2.3.3. Message packet formats
+#### 3.3.3. Message packet formats
 
 The packet format-specific data in the common packet header contains the
 following message flags:
@@ -348,7 +398,7 @@ In other words, the message fields are aligned to a 2-byte boundary, with the
 amount of padding depending on the preceding fields.
 
 
-##### 2.3.3.1. Message length
+##### 3.3.3.1. Message length
 
 When the long message flag is not set, the short message length field of the
 common packet header is used.
@@ -361,10 +411,10 @@ field:
      long message length        | 4
 
 The vector length is either an 8-bit or a 32-bit value; while the theoretical
-maximum length is 2^32-1, implementations may impose a stricter limit.
+maximum length is 2<sup>32</sup>-1, implementations MAY impose a stricter limit.
 
 
-##### 2.3.3.2. Message payload size
+##### 3.3.3.2. Message payload size
 
 When the large data flag is not set, the message packet contains the following
 fields:
@@ -385,10 +435,10 @@ The large size vector is aligned to an 8-byte boundary, with the amount of
 padding depending on the preceding fields.
 
 The sizes are either 16-bit or 64-bit values.  While the theoretical maximum
-size is 2^64-1, implementations may impose a stricter limit.
+size is 2<sup>64</sup>-1, implementations MAY impose a stricter limit.
 
 
-##### 2.3.3.3. Message payload data
+##### 3.3.3.3. Message payload data
 
 Message packets contain the following field:
 
@@ -402,7 +452,7 @@ data vector to an 8-byte bounary.  The parts of the data vector are aligned to
 8-byte boundaries by padding at the end.
 
 
-##### 2.3.3.3. Message packet examples
+##### 3.3.3.4. Message packet examples
 
 Wire format of a short, small message (unicast, with a 1-byte channel id, and a
 3-part payload with 3-, 0- and 5-byte payload parts):
@@ -474,47 +524,48 @@ channel ids and a 2-part payload, excluding payload data vector for brevity):
     +---------------+---------------+---------------+---------------+
 
 
-## 3. Functions
+## 4. Functions
 
-### 3.1. Messaging
+### 4.1. Messaging
 
 Messages have an implicit 32-bit sequence number, starting at 0, incrementing
-monotonically, and wrapping from 2^32-1 to 0.  Theoretically there can be up to
-2^32-1 outstanding messages at a given time, but an implementation may impose a
-stricter limit.  The receiver must to acknowledge consumed messages to prevent
-blocking.
+monotonically, and wrapping from 2<sup>32</sup>-1 to 0.  Theoretically there
+can be up to 2<sup>32</sup>-1 outstanding messages at a given time, but an
+implementation MAY impose a stricter limit.  The receiver needs to acknowledge
+consumed messages to prevent blocking.
 
 Multicasting assigns different sequence number for each channel, and the
-acknowledgements must be done for each channel.
+acknowledgements need to be done for each channel.
 
 
-### 3.2. Transactional messaging
+### 4.2. Transactional messaging
 
 When transactions are enabled, the sender requests received messages to be
 processed (commit op) or ignored (rollback op) by the receiver.  In case of
 commit, the receiver indicates success (committed ack) or failure (uncommitted
 ack).
 
-Since a rollback doesn't have to be acknowledged, the next commit must be
+~~Since a rollback doesn't have to be acknowledged, the next commit MUST be
 acknowledged by specifying the sequence number explicitly.  This design is
 necessary because the rollback may have been missed in case of reconnection,
-and to avoid taxing slow links which may receive lots of rollbacks.
+and to avoid taxing slow links which may receive lots of rollbacks.~~
 
 
-### 3.3. Channel closure
+### 4.3. Channel closure
 
 Sender notifies the receiver that it is closing a channel (close op).  Receiver
 acknowledges the closure (closed ack).  After this, the channel may be reopened
 by the sender (by sending a message).
 
 
-### 3.4. Health check
+### 4.4. Health check
 
-Ping packets may be sent at will.  A pong packet must be sent when a ping
-packet is received.  A pong must not be queued to be sent after a reconnection.
+Ping packets MAY be sent at any time.  A pong packet SHOULD be sent when a ping
+packet is received, unless the connection is closed before it's possible.  A
+pong MUST NOT be queued to be sent after a reconnection.
 
 
-### 3.5. Reconnection
+### 4.5. Reconnection
 
 A peer sends the resume packet when:
 
@@ -523,10 +574,13 @@ A peer sends the resume packet when:
    (optionally) committed/uncommitted messages.
 
 
-### 3.6. Link shutdown
+### 4.6. Link shutdown
 
 The shutdown packet means that the sender isn't going to open any more
-channels.  The connection can be terminated, the link state discarded and
-reconnecting stopped after both peers have sent a shutdown packet.
+channels.  The connection SHOULD be terminated, the link state SHOULD be
+discarded and reconnecting MUST be stopped after both peers have sent a
+shutdown packet.
 
+
+[RFC 2119]: https://www.ietf.org/rfc/rfc2119.txt
 

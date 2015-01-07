@@ -1,9 +1,8 @@
-package relink
+package offhand
 
 import (
 	"fmt"
 	"math"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -332,20 +331,20 @@ type IncomingChannel struct {
 	Id               ChannelId
 	IncomingMessages chan *IncomingMessage
 
-	// The rest are protected by Link.xmitLock, except messageConsumeSequence.
+	// The rest are protected by Link.xmitLock, except messageConsumeLatest.
 
 	queued bool
 
 	messageReceived uint32
 	messageReceiver chan *IncomingMessage
 
-	messageConsumeSequence uint32
-	messageConsumeNotify   chan bool
-	messageRewindNotify    chan bool
+	messageConsumeLatest chan bool
 
-	messageConsumed     uint32
-	messageConsumedCond sync.Cond
-	messageConsumeSent  uint32
+	messageConsumeUntilSeq uint32
+	messageConsumeUntil    chan bool
+
+	messageConsumed    uint32
+	messageConsumeSent uint32
 
 	closed      bool
 	closeToSend bool
@@ -366,9 +365,8 @@ func newIncomingChannel(l *Link, id ChannelId, messages chan *IncomingMessage) *
 func (c *IncomingChannel) receiveEarly(m Message, bufferSize int) *IncomingMessage {
 	if c.messageReceiver == nil {
 		c.messageReceiver = make(chan *IncomingMessage)
-		c.messageConsumeNotify = make(chan bool, 1)
-		c.messageRewindNotify = make(chan bool, 1)
-		c.messageConsumedCond.L = &c.Link.xmitLock
+		c.messageConsumeLatest = make(chan bool, 1)
+		c.messageConsumeUntil = make(chan bool, 1)
 
 		go c.bufferLoop(bufferSize)
 	}
@@ -377,7 +375,7 @@ func (c *IncomingChannel) receiveEarly(m Message, bufferSize int) *IncomingMessa
 
 	return &IncomingMessage{
 		Message:  m,
-		Sequence: MessageSequence(c.messageReceived),
+		Sequence: IncomingMessageSequence(c.messageReceived),
 		channel:  c,
 	}
 }
@@ -425,21 +423,17 @@ func (c *IncomingChannel) bufferLoop(bufferSize int) {
 			outputItem = unconsumed[delivered]
 		}
 
-		var rewind bool
-
 		select {
 		case im := <-inputChan:
 			if im == nil {
 				receiver = nil
-				continue
+				break
 			}
 
 			unconsumed = append(unconsumed, im)
-			continue
 
 		case outputChan <- outputItem:
 			delivered++
-			continue
 
 		case <-timeChan:
 			t := c.Link.updateTransmission()
@@ -452,69 +446,102 @@ func (c *IncomingChannel) bufferLoop(bufferSize int) {
 			t.done()
 
 			timeChan = nil
-			continue
 
-		case <-c.messageConsumeNotify:
+		case <-c.messageConsumeLatest:
+			if delivered == 0 {
+				if c.Id == noChannelId {
+					c.Link.Endpoint.Logger.Printf("%v: consuming latest but nothing delivered", c.Link)
+				} else {
+					c.Link.Endpoint.Logger.Printf("%v: consuming latest but nothing delivered on channel %v", c.Link, c.Id)
+				}
 
-		case <-c.messageRewindNotify:
-			rewind = true
-		}
-
-		// consume and (optionally) rewind
-
-		sequence := atomic.LoadUint32(&c.messageConsumeSequence)
-		consumeCount := sequence - c.messageConsumed
-
-		if consumeCount > uint32(delivered) {
-			min := c.messageConsumed
-			max := min + uint32(delivered)
-
-			if c.Id == noChannelId {
-				c.Link.Endpoint.Logger.Printf("%v: consumed sequence %d out of modular range [%d,%d]", c.Link, sequence, min, max)
-			} else {
-				c.Link.Endpoint.Logger.Printf("%v: consumed sequence %d out of modular range [%d,%d] on channel %v", c.Link, sequence, min, max, c.Id)
+				break
 			}
 
-			continue
-		}
+			if delivered == 1 {
+				var ack bool
 
-		var ack bool
+				t := c.Link.updateTransmission()
 
-		t := c.Link.updateTransmission()
+				c.messageConsumed++
 
-		c.messageConsumed = sequence
+				if int(c.messageConsumed-c.messageConsumeSent) >= c.Link.Endpoint.MessageAckWindow && !c.queued && !c.Link.xmitPeerShutdown {
+					t.enqueue(c)
+					c.queued = true
+					ack = true
+				}
 
-		if int(c.messageConsumed-c.messageConsumeSent) >= c.Link.Endpoint.MessageAckWindow && !c.queued && !c.Link.xmitPeerShutdown {
-			t.enqueue(c)
-			c.queued = true
-			ack = true
-		}
+				t.done()
 
-		t.done()
+				if ack && timeChan != nil {
+					timer.Stop()
+					timeChan = nil
+				}
 
-		c.messageConsumedCond.Broadcast()
+				if !ack && timeChan == nil {
+					timer = time.NewTimer(jitter(c.Link.Endpoint.MessageAckDelay, -0.1))
+					timeChan = timer.C
+				}
+			}
 
-		if ack && timeChan != nil {
-			timer.Stop()
-			timeChan = nil
-		}
+			if len(consumed) == 1 {
+				unconsumed = nil
+				delivered = 0
+			} else {
+				delivered--
+				unconsumed = unconsumed[:]
+			}
 
-		if !ack && timeChan == nil {
-			timer = time.NewTimer(jitter(c.Link.Endpoint.MessageAckDelay, -0.1))
-			timeChan = timer.C
-		}
+		case <-c.messageConsumeUntil:
+			consumeUntil := atomic.LoadUint32(&c.messageConsumeUntilSeq)
+			untilCount := consumeUntil - c.messageConsumed
 
-		unconsumed = unconsumed[consumeCount:]
+			if untilCount > 0 {
+				if untilCount > uint32(delivered) {
+					min := c.messageConsumed
+					max := min + uint32(delivered)
 
-		// release memory
-		if len(unconsumed) == 0 {
-			unconsumed = nil
-		}
+					if c.Id == noChannelId {
+						c.Link.Endpoint.Logger.Printf("%v: consumed until-sequence %d out of modular range [%d,%d]", c.Link, consumeUntil, min, max)
+					} else {
+						c.Link.Endpoint.Logger.Printf("%v: consumed until-sequence %d out of modular range [%d,%d] on channel %v", c.Link, consumeUntil, min, max, c.Id)
+					}
 
-		if rewind {
-			delivered = 0
-		} else {
-			delivered -= int(consumeCount)
+					break
+				}
+
+				var ack bool
+
+				t := c.Link.updateTransmission()
+
+				c.messageConsumed = consumeUntil
+
+				if int(c.messageConsumed-c.messageConsumeSent) >= c.Link.Endpoint.MessageAckWindow && !c.queued && !c.Link.xmitPeerShutdown {
+					t.enqueue(c)
+					c.queued = true
+					ack = true
+				}
+
+				t.done()
+
+				if ack && timeChan != nil {
+					timer.Stop()
+					timeChan = nil
+				}
+
+				if !ack && timeChan == nil {
+					timer = time.NewTimer(jitter(c.Link.Endpoint.MessageAckDelay, -0.1))
+					timeChan = timer.C
+				}
+
+				unconsumed = unconsumed[untilCount:]
+				delivered -= int(untilCount)
+
+				// release memory
+				if len(unconsumed) == 0 {
+					unconsumed = nil
+				}
+			}
 		}
 	}
 
@@ -538,46 +565,21 @@ func (c *IncomingChannel) bufferLoop(bufferSize int) {
 	t.done()
 }
 
-// Consume
-func (c *IncomingChannel) Consume(seq MessageSequence) {
-	oldSeq := atomic.SwapUint32(&c.messageConsumeSequence, uint32(seq))
-	if uint32(seq) == oldSeq {
-		return
-	}
-
-	c.consumeWait(c.messageConsumeNotify, oldSeq)
-}
-
-// ConsumeAndRewind
-func (c *IncomingChannel) ConsumeAndRewind(seq MessageSequence) {
-	oldSeq := atomic.SwapUint32(&c.messageConsumeSequence, uint32(seq))
-	if uint32(seq) == oldSeq {
-		return
-	}
-
-	c.consumeWait(c.messageRewindNotify, oldSeq)
-}
-
-// Rewind
-func (c *IncomingChannel) Rewind() {
-	oldSeq := atomic.LoadUint32(&c.messageConsumeSequence)
-	c.consumeWait(c.messageRewindNotify, oldSeq)
-}
-
-// consumeWait
-func (c *IncomingChannel) consumeWait(notify chan<- bool, oldSeq uint32) {
+// ConsumeLatest
+func (c *IncomingChannel) ConsumeLatest() {
 	select {
-	case notify <- true:
+	case c.messageConsumeLatest <- true:
 	default:
 	}
+}
 
-	c.Link.xmitLock.Lock()
-	defer c.Link.xmitLock.Unlock()
+// ConsumeUntil
+func (c *IncomingChannel) ConsumeUntil(seq IncomingMessageSequence) {
+	atomic.StoreUint32(&c.messageConsumeUntilSeq, uint32(seq))
 
-	// this doesn't work right if we get scheduled for the first time when the
-	// sequence has advanced exactly 2^32
-	for c.messageConsumed == oldSeq {
-		c.messageConsumedCond.Wait()
+	select {
+	case c.messageConsumeUntil <- true:
+	default:
 	}
 }
 

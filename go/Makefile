@@ -10,7 +10,7 @@ GOMAXPROCS	:= $(shell getconf _NPROCESSORS_ONLN || true)
 GOPATH		:= $(shell pwd)
 GOFMT		:= $(GO)fmt
 TESTFLAGS	:= 
-PIPESED		:= | sed -r "s,^\t([a-z_]+\.go:),relink/\1,"
+PIPESED		:= | sed -r "s,^\t([a-z_]+\.go:),offhand/\1,"
 
 export GOPATH
 export GOMAXPROCS
@@ -18,12 +18,12 @@ export GOMAXPROCS
 all:: fmt-vet check
 
 fmt-vet::
-	$(GOFMT) -d -s ./relink ./relish
-	$(GO) vet ./relink ./relish
+	$(GOFMT) -d -s ./offhand ./shell
+	$(GO) vet ./offhand ./shell
 
 check::
 #	$(GO) help testflag
-	$(GO) test -v $(TESTFLAGS) ./relink ./relish $(PIPESED)
+	$(GO) test -v $(TESTFLAGS) ./offhand ./shell $(PIPESED)
 
-../relish::
-	$(GO) build -o $@ ./relish
+../shell::
+	$(GO) build -o $@ ./shell

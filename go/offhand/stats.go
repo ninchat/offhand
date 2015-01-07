@@ -1,4 +1,4 @@
-package relink
+package offhand
 
 // Stats of endpoint and link activity.  The fields are incremented using
 // atomic operations.

@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"../relink"
+	"../offhand"
 )
 
 func Client() {
@@ -25,8 +25,8 @@ func Client() {
 		os.Exit(2)
 	}
 
-	connector := &relink.TLSConnector{
-		NetConnector: relink.NetConnector{
+	connector := &offhand.TLSConnector{
+		NetConnector: offhand.NetConnector{
 			Network: "tcp",
 			Address: flag.Arg(1),
 			Dialer: net.Dialer{
@@ -38,14 +38,14 @@ func Client() {
 		},
 	}
 
-	endpoint := &relink.Endpoint{
-		Links:  make(chan *relink.Link),
-		Logger: relink.NullLogger,
+	endpoint := &offhand.Endpoint{
+		Links:  make(chan *offhand.Link),
+		Logger: offhand.NullLogger,
 	}
 
 	defer endpoint.Close()
 
-	if _, err := endpoint.Connect(connector, "relish"); err != nil {
+	if _, err := endpoint.Connect(connector, "shell"); err != nil {
 		log.Print(err)
 		os.Exit(1)
 	}
