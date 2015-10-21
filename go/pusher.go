@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"golang.org/x/net/context"
 )
 
 const (
@@ -26,7 +28,7 @@ type Stats struct {
 }
 
 type Pusher interface {
-	SendMultipart(message [][]byte, start_time time.Time) bool
+	SendMultipart(ctx context.Context, message [][]byte, start_time time.Time) (bool, error)
 	Close()
 	LoadStats(s *Stats)
 }
@@ -82,12 +84,12 @@ func (p *pusher) Close() {
 	p.listener.Close()
 }
 
-func (p *pusher) SendMultipart(message [][]byte, start_time time.Time) bool {
+func (p *pusher) SendMultipart(ctx context.Context, message [][]byte, start_time time.Time) (ok bool, err error) {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
 	if p.closing {
-		return false
+		return
 	}
 
 	var message_size uint32
@@ -112,9 +114,16 @@ func (p *pusher) SendMultipart(message [][]byte, start_time time.Time) bool {
 
 	atomic.AddInt32(&p.Queued, 1)
 
-	p.queue<- &item{data, start_time}
+	select {
+	case p.queue <- &item{data, start_time}:
+		ok = true
 
-	return true
+	case <-ctx.Done():
+		atomic.AddInt32(&p.Queued, -1)
+		err = ctx.Err()
+	}
+
+	return
 }
 
 func (p *pusher) accept_loop() {
