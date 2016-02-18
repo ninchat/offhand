@@ -21,12 +21,12 @@ class UnexpectedEOF(Exception):
 class UnknownCommand(Exception):
 
 	def __init__(self, command):
-		Exception.__init__(self, "Unknown command: %d" % ord(command))
+		Exception.__init__(self, "Unknown command: %r" % command)
 
 class UnexpectedCommand(Exception):
 
 	def __init__(self, command):
-		Exception.__init__(self, "Unexpected command: %d" % ord(command))
+		Exception.__init__(self, "Unexpected command: %r" % command)
 
 class CorruptedMessage(Exception):
 
@@ -69,7 +69,7 @@ def parse_message(data):
 		if remain < 4:
 			raise CorruptedMessage()
 
-		part_size, = struct.unpack(b"<I", data[offset : offset+4])
+		part_size, = struct.unpack("<I", data[offset : offset+4])
 		offset += 4
 
 		if remain < 4 + part_size:

@@ -99,22 +99,20 @@ class Connection(object):
 
 			raise Reconnect(timedout)
 
-	def send(self, data):
-		n = 0
+	def send_byte(self, byte):
+		assert len(byte) == 1
 
-		while n < len(data):
-			ok = False
+		while True:
 			timedout = False
 			eof = False
 
 			try:
-				ret = self.sock.send(data[n:])
+				ret = self.sock.send(byte)
 				if ret == 0:
 					log.error("%s: unexpected EOF", self)
 					eof = True
 				else:
-					n += ret
-					ok = True
+					return
 			except socket.timeout as e:
 				log.error("%s: send: %s", self, e)
 				timedout = True
@@ -127,8 +125,7 @@ class Connection(object):
 			except Exception:
 				log.exception("%s: send", self)
 
-			if not ok:
-				raise Reconnect(timedout, eof)
+			raise Reconnect(timedout, eof)
 
 	def recv(self, size, initial=False):
 		data = b""
@@ -186,23 +183,23 @@ def connect_pull(handler, address, stats, connection_type=Connection):
 
 					while True:
 						with occu_stat:
-							command, = conn.recv(1, initial=True)
+							command = conn.recv(1, initial=True)
 							occu_stat.trigger()
 
 							if command == COMMAND_KEEPALIVE:
-								conn.send(REPLY_KEEPALIVE)
+								conn.send_byte(REPLY_KEEPALIVE)
 								continue
 							elif command != COMMAND_BEGIN:
 								raise UnexpectedCommand(command)
 
-							size, = struct.unpack(b"<I", conn.recv(4))
+							size, = struct.unpack("<I", conn.recv(4))
 							data = conn.recv(size)
 
-							conn.send(REPLY_RECEIVED)
+							conn.send_byte(REPLY_RECEIVED)
 
-							command, = conn.recv(1)
+							command = conn.recv(1)
 							if command == COMMAND_COMMIT:
-								latency, = struct.unpack(b"<I", conn.recv(4))
+								latency, = struct.unpack("<I", conn.recv(4))
 								start_time = time.time() - latency / 1000000.0
 							elif command == COMMAND_ROLLBACK:
 								stats.total_rolledback += 1
@@ -211,10 +208,10 @@ def connect_pull(handler, address, stats, connection_type=Connection):
 								raise UnexpectedCommand(command)
 
 							if handler(parse_message(data), start_time):
-								conn.send(REPLY_ENGAGED)
+								conn.send_byte(REPLY_ENGAGED)
 								stats.total_engaged += 1
 							else:
-								conn.send(REPLY_CANCELED)
+								conn.send_byte(REPLY_CANCELED)
 								stats.total_canceled += 1
 				except Reconnect as e:
 					if e.timedout or e.eof:

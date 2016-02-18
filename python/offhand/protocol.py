@@ -1,9 +1,12 @@
-COMMAND_BEGIN     = chr(10)
-COMMAND_COMMIT    = chr(21)
-COMMAND_ROLLBACK  = chr(30)
-COMMAND_KEEPALIVE = chr(40)
+def byte(x):
+	return bytes(bytearray([x]))
 
-REPLY_RECEIVED   = chr(11)
-REPLY_ENGAGED    = chr(21)
-REPLY_CANCELED   = chr(22)
-REPLY_KEEPALIVE  = chr(41)
+COMMAND_BEGIN     = byte(10)
+COMMAND_COMMIT    = byte(21)
+COMMAND_ROLLBACK  = byte(30)
+COMMAND_KEEPALIVE = byte(40)
+
+REPLY_RECEIVED  = byte(11)
+REPLY_ENGAGED   = byte(21)
+REPLY_CANCELED  = byte(22)
+REPLY_KEEPALIVE = byte(41)
