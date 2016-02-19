@@ -17,7 +17,16 @@ from . import (
 	parse_message,
 )
 
-from .protocol import *
+from .protocol import (
+	COMMAND_BEGIN,
+	COMMAND_COMMIT,
+	COMMAND_ROLLBACK,
+	COMMAND_KEEPALIVE,
+	REPLY_RECEIVED,
+	REPLY_ENGAGED,
+	REPLY_CANCELED,
+	REPLY_KEEPALIVE,
+)
 
 class Reconnect(Exception):
 

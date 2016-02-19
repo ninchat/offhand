@@ -8,7 +8,6 @@ __all__ = [
 ]
 
 import logging
-import operator
 import struct
 
 log = logging.getLogger("offhand")
