@@ -34,6 +34,7 @@ type Pusher interface {
 }
 
 type item struct {
+	ctx        context.Context
 	data       []byte
 	start_time time.Time
 }
@@ -115,7 +116,7 @@ func (p *pusher) SendMultipart(ctx context.Context, message [][]byte, start_time
 	atomic.AddInt32(&p.Queued, 1)
 
 	select {
-	case p.queue <- &item{data, start_time}:
+	case p.queue <- &item{ctx, data, start_time}:
 		ok = true
 
 	case <-ctx.Done():
@@ -170,8 +171,14 @@ func (p *pusher) conn_loop(conn net.Conn) {
 				return
 			}
 
-			if !p.send_item(conn, item) {
-				return
+			select {
+			case <-item.ctx.Done():
+				// item canceled
+
+			default:
+				if !p.send_item(conn, item) {
+					return
+				}
 			}
 
 		case <-keepalive_timer.C:
@@ -248,6 +255,18 @@ func (p *pusher) send_item(conn net.Conn, item *item) (ok bool) {
 		}
 
 		return
+	}
+
+	// check cancellation
+
+	if !rollback {
+		select {
+		case <-item.ctx.Done():
+			rollback = true
+			conn.SetDeadline(time.Now().Add(rollback_timeout))
+
+		default:
+		}
 	}
 
 	// rollback command
