@@ -97,7 +97,7 @@ func (p *puller) loop(addr string) {
 
 			commit_channel := make(chan byte)
 
-			p.recv<- &Commit{
+			p.recv <- &Commit{
 				Message:   message,
 				StartTime: start_time,
 				reply:     commit_channel,
@@ -114,12 +114,12 @@ func (p *puller) loop(addr string) {
 }
 
 func (c *Commit) Engage() {
-	c.reply<- engaged_reply
+	c.reply <- engaged_reply
 	c.reply = nil
 }
 
 func (c *Commit) Cancel() {
-	c.reply<- canceled_reply
+	c.reply <- canceled_reply
 	c.reply = nil
 }
 

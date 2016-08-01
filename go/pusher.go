@@ -98,7 +98,7 @@ func (p *pusher) SendMultipart(ctx context.Context, message [][]byte, start_time
 		message_size += uint32(4 + len(frame))
 	}
 
-	data := make([]byte, 5 + message_size)
+	data := make([]byte, 5+message_size)
 	data[0] = begin_command
 	binary.LittleEndian.PutUint32(data[1:5], message_size)
 
@@ -177,7 +177,7 @@ func (p *pusher) conn_loop(conn net.Conn) {
 		case <-keepalive_timer.C:
 			conn.SetDeadline(time.Now().Add(keepalive_timeout))
 
-			if _, err := conn.Write([]byte{ keepalive_command }); err != nil {
+			if _, err := conn.Write([]byte{keepalive_command}); err != nil {
 				p.log_initial(err)
 				return
 			}
@@ -208,7 +208,7 @@ func (p *pusher) send_item(conn net.Conn, item *item) (ok bool) {
 			return
 		}
 
-		p.queue<- item
+		p.queue <- item
 		p.log_initial(err)
 
 		if !timeout(err) {
@@ -216,7 +216,6 @@ func (p *pusher) send_item(conn net.Conn, item *item) (ok bool) {
 		}
 
 		rollback = true
-
 		conn.SetDeadline(time.Now().Add(rollback_timeout))
 
 		if _, err := conn.Write(item.data[n:]); err != nil {
@@ -231,7 +230,7 @@ func (p *pusher) send_item(conn net.Conn, item *item) (ok bool) {
 			return
 		}
 
-		p.queue<- item
+		p.queue <- item
 		p.log_initial(err)
 
 		if !timeout(err) {
@@ -239,13 +238,12 @@ func (p *pusher) send_item(conn net.Conn, item *item) (ok bool) {
 		}
 
 		rollback = true
-
 		conn.SetDeadline(time.Now().Add(rollback_timeout))
 	}
 
 	if reply_buf[0] != received_reply {
 		if !rollback {
-			p.queue<- item
+			p.queue <- item
 			p.log(errors.New("bad reply to begin command"))
 		}
 
@@ -255,7 +253,7 @@ func (p *pusher) send_item(conn net.Conn, item *item) (ok bool) {
 	// rollback command
 
 	if rollback {
-		if _, err := conn.Write([]byte{ rollback_command }); err != nil {
+		if _, err := conn.Write([]byte{rollback_command}); err != nil {
 			return
 		}
 
@@ -269,10 +267,10 @@ func (p *pusher) send_item(conn net.Conn, item *item) (ok bool) {
 
 	commit_buf := make([]byte, 5)
 	commit_buf[0] = commit_command
-	binary.LittleEndian.PutUint32(commit_buf[1:], uint32(time.Now().Sub(item.start_time).Nanoseconds() / 1000))
+	binary.LittleEndian.PutUint32(commit_buf[1:], uint32(time.Now().Sub(item.start_time).Nanoseconds()/1000))
 
 	if _, err := conn.Write(commit_buf); err != nil {
-		p.queue<- item
+		p.queue <- item
 		p.log(err)
 		return
 	}
@@ -280,7 +278,7 @@ func (p *pusher) send_item(conn net.Conn, item *item) (ok bool) {
 	// commit reply
 
 	if _, err := conn.Read(reply_buf); err != nil {
-		p.queue<- item
+		p.queue <- item
 		p.log(err)
 		return
 	}
@@ -291,17 +289,17 @@ func (p *pusher) send_item(conn net.Conn, item *item) (ok bool) {
 			p.flush.Broadcast()
 		}
 
-		atomic.AddUint64(&p.TotalDelayUs, uint64(time.Now().Sub(item.start_time).Nanoseconds()) / 1000)
+		atomic.AddUint64(&p.TotalDelayUs, uint64(time.Now().Sub(item.start_time).Nanoseconds())/1000)
 		atomic.AddUint64(&p.TotalSent, 1)
 		ok = true
 
 	case canceled_reply:
-		p.queue<- item
+		p.queue <- item
 		atomic.AddUint64(&p.TotalCancelled, 1)
 		ok = true
 
 	default:
-		p.queue<- item
+		p.queue <- item
 		p.log(errors.New("bad reply to commit command"))
 	}
 
@@ -335,11 +333,11 @@ func (p *pusher) log(err error) {
 }
 
 func (p *pusher) LoadStats(s *Stats) {
-	s.Conns          = atomic.LoadInt32(&p.Conns)
-	s.Queued         = atomic.LoadInt32(&p.Queued)
-	s.TotalDelayUs   = atomic.LoadUint64(&p.TotalDelayUs)
-	s.TotalSent      = atomic.LoadUint64(&p.TotalSent)
-	s.TotalTimeouts  = atomic.LoadUint64(&p.TotalTimeouts)
-	s.TotalErrors    = atomic.LoadUint64(&p.TotalErrors)
+	s.Conns = atomic.LoadInt32(&p.Conns)
+	s.Queued = atomic.LoadInt32(&p.Queued)
+	s.TotalDelayUs = atomic.LoadUint64(&p.TotalDelayUs)
+	s.TotalSent = atomic.LoadUint64(&p.TotalSent)
+	s.TotalTimeouts = atomic.LoadUint64(&p.TotalTimeouts)
+	s.TotalErrors = atomic.LoadUint64(&p.TotalErrors)
 	s.TotalCancelled = atomic.LoadUint64(&p.TotalCancelled)
 }
