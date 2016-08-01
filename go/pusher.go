@@ -120,7 +120,10 @@ func (p *pusher) SendMultipart(ctx context.Context, message [][]byte, start_time
 		ok = true
 
 	case <-ctx.Done():
-		atomic.AddInt32(&p.Queued, -1)
+		if atomic.AddInt32(&p.Queued, -1) == 0 {
+			p.flush.Broadcast()
+		}
+
 		err = ctx.Err()
 	}
 
@@ -173,7 +176,9 @@ func (p *pusher) conn_loop(conn net.Conn) {
 
 			select {
 			case <-item.ctx.Done():
-				// item canceled
+				if atomic.AddInt32(&p.Queued, -1) == 0 {
+					p.flush.Broadcast()
+				}
 
 			default:
 				if !p.send_item(conn, item) {
@@ -262,6 +267,13 @@ func (p *pusher) send_item(conn net.Conn, item *item) (ok bool) {
 	if !rollback {
 		select {
 		case <-item.ctx.Done():
+			// signal Close method after writing rollback command
+			defer func() {
+				if atomic.AddInt32(&p.Queued, -1) == 0 {
+					p.flush.Broadcast()
+				}
+			}()
+
 			rollback = true
 			conn.SetDeadline(time.Now().Add(rollback_timeout))
 
