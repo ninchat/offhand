@@ -9,7 +9,8 @@ import (
 type Commit struct {
 	Message   [][]byte
 	StartTime time.Time
-	reply     chan byte
+
+	reply chan byte
 }
 
 type Puller interface {
@@ -45,21 +46,21 @@ func (p *puller) loop(addr string) {
 
 		for {
 			bytecode := make([]byte, 1)
-			if _, err := conn.Read(bytecode); err != nil || bytecode[0] != begin_command {
+			if _, err := conn.Read(bytecode); err != nil || bytecode[0] != beginCommand {
 				break
 			}
 
-			var message_size uint32
-			if err := binary.Read(conn, binary.LittleEndian, &message_size); err != nil {
+			var messageSize uint32
+			if err := binary.Read(conn, binary.LittleEndian, &messageSize); err != nil {
 				break
 			}
 
-			payload := make([]byte, message_size)
+			payload := make([]byte, messageSize)
 			if _, err := conn.Read(payload); err != nil {
 				break
 			}
 
-			bytecode[0] = received_reply
+			bytecode[0] = receivedReply
 			if _, err := conn.Write(bytecode); err != nil {
 				break
 			}
@@ -67,10 +68,10 @@ func (p *puller) loop(addr string) {
 			if _, err := conn.Read(bytecode); err != nil {
 				break
 			}
-			if bytecode[0] == rollback_command {
+			if bytecode[0] == rollbackCommand {
 				continue
 			}
-			if bytecode[0] != commit_command {
+			if bytecode[0] != commitCommand {
 				break
 			}
 
@@ -79,7 +80,7 @@ func (p *puller) loop(addr string) {
 				break
 			}
 
-			start_time := time.Now().Add(time.Duration(latency) * -1000)
+			startTime := time.Now().Add(time.Duration(latency) * -1000)
 
 			message := make([][]byte, 0)
 
@@ -95,15 +96,15 @@ func (p *puller) loop(addr string) {
 				payload = payload[size:]
 			}
 
-			commit_channel := make(chan byte)
+			commitChannel := make(chan byte)
 
 			p.recv <- &Commit{
 				Message:   message,
-				StartTime: start_time,
-				reply:     commit_channel,
+				StartTime: startTime,
+				reply:     commitChannel,
 			}
 
-			bytecode[0] = <-commit_channel
+			bytecode[0] = <-commitChannel
 			if _, err := conn.Write(bytecode); err != nil {
 				break
 			}
@@ -114,12 +115,12 @@ func (p *puller) loop(addr string) {
 }
 
 func (c *Commit) Engage() {
-	c.reply <- engaged_reply
+	c.reply <- engagedReply
 	c.reply = nil
 }
 
 func (c *Commit) Cancel() {
-	c.reply <- canceled_reply
+	c.reply <- canceledReply
 	c.reply = nil
 }
 
