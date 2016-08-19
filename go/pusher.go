@@ -1,6 +1,7 @@
 package offhand
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -9,8 +10,6 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-
-	"golang.org/x/net/context"
 )
 
 const (
