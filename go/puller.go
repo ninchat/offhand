@@ -14,7 +14,7 @@ type Commit struct {
 }
 
 type Puller interface {
-	Connect(addr string)
+	Connect(network, addr string)
 	RecvChannel() <-chan *Commit
 }
 
@@ -28,17 +28,17 @@ func NewPuller() Puller {
 	}
 }
 
-func (p *puller) Connect(addr string) {
-	go p.loop(addr)
+func (p *puller) Connect(network, addr string) {
+	go p.loop(network, addr)
 }
 
 func (p *puller) RecvChannel() <-chan *Commit {
 	return p.recv
 }
 
-func (p *puller) loop(addr string) {
+func (p *puller) loop(network, addr string) {
 	for {
-		conn, err := net.Dial("tcp", addr)
+		conn, err := net.Dial(network, addr)
 		if err != nil {
 			time.Sleep(time.Millisecond)
 			continue
