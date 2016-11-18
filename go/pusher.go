@@ -151,7 +151,7 @@ func (p *pusher) connLoop(conn net.Conn) {
 
 	defer func() {
 		if disableLinger {
-			if tcp := conn.(*net.TCPConn); tcp != nil {
+			if tcp, ok := conn.(*net.TCPConn); ok {
 				tcp.SetLinger(0)
 			}
 		}
