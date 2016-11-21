@@ -215,10 +215,6 @@ func (p *pusher) sendItem(conn net.Conn, item *item) (ok bool) {
 	conn.SetDeadline(time.Now().Add(beginTimeout))
 
 	if n, err := conn.Write(item.data); err != nil {
-		if rollback {
-			return
-		}
-
 		p.queue <- item
 		p.logInitial(err)
 
