@@ -29,6 +29,31 @@ from .protocol import (
 )
 
 
+class Commit(object):
+    """Abstract class, mostly for typing."""
+    engaged = False
+
+    def __enter__(self):
+        # type: () -> Commit
+        return self
+
+    def __exit__(self, *exc):
+        # type: (*exc) -> None
+        self.close()
+
+    def engage(self):
+        # type: () -> None
+        raise NotImplemented()
+
+    def cancel(self):
+        # type: () -> None
+        raise NotImplemented()
+
+    def close(self):
+        # type: () -> None
+        raise NotImplemented()
+
+
 class Reconnect(Exception):
 
     def __init__(self, timedout=False, eof=False, initial=False):

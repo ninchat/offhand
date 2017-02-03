@@ -11,18 +11,11 @@ import gevent.pool
 from . import syn
 
 
-class Commit(object):
+class Commit(syn.Commit):
 
     def __init__(self):
         self._event = gevent.event.Event()
         self.closed = False
-        self.engaged = False
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
 
     def engage(self):
         if self.closed:
@@ -58,7 +51,7 @@ def connect_pull(handler, address, group=None, *args, **kwargs):
     def result_handler(message, start_time):
         commit = Commit()
         group.spawn(commit_handler, message, start_time, commit)
-        return commit.wait()
+        return commit._wait()
 
     try:
         syn.connect_pull(result_handler, address, *args, **kwargs)
