@@ -38,7 +38,6 @@ class Commit(object):
         return self
 
     def __exit__(self, *exc):
-        # type: (*exc) -> None
         self.close()
 
     def engage(self):
