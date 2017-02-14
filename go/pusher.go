@@ -2,6 +2,7 @@ package offhand
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -42,6 +43,7 @@ type pusher struct {
 	Stats
 
 	listener net.Listener
+	tls      *tls.Config
 	logger   func(error)
 	queue    chan *item
 	mutex    sync.RWMutex
@@ -50,9 +52,10 @@ type pusher struct {
 	closed   bool
 }
 
-func NewListenPusher(listener net.Listener, logger func(error)) Pusher {
+func NewListenPusher(listener net.Listener, tlsConfig *tls.Config, logger func(error)) Pusher {
 	p := &pusher{
 		listener: listener,
+		tls:      tlsConfig,
 		logger:   logger,
 		queue:    make(chan *item, pusherQueueLength),
 	}
@@ -158,6 +161,17 @@ func (p *pusher) connLoop(conn net.Conn) {
 
 		conn.Close()
 	}()
+
+	if p.tls != nil {
+		conn.SetDeadline(time.Now().Add(starttlsTimeout))
+
+		if _, err := conn.Write([]byte{starttlsCommand}); err != nil {
+			p.logInitial(err)
+			return
+		}
+
+		conn = tls.Server(conn, p.tls)
+	}
 
 	replyBuf := make([]byte, 1)
 

@@ -1,6 +1,7 @@
 package offhand
 
 import (
+	"crypto/tls"
 	"encoding/binary"
 	"net"
 	"time"
@@ -14,7 +15,7 @@ type Commit struct {
 }
 
 type Puller interface {
-	Connect(network, addr string)
+	Connect(network, addr string, tlsConfig *tls.Config)
 	RecvChannel() <-chan *Commit
 }
 
@@ -28,15 +29,15 @@ func NewPuller() Puller {
 	}
 }
 
-func (p *puller) Connect(network, addr string) {
-	go p.loop(network, addr)
+func (p *puller) Connect(network, addr string, tlsConfig *tls.Config) {
+	go p.loop(network, addr, tlsConfig)
 }
 
 func (p *puller) RecvChannel() <-chan *Commit {
 	return p.recv
 }
 
-func (p *puller) loop(network, addr string) {
+func (p *puller) loop(network, addr string, tlsConfig *tls.Config) {
 	for {
 		conn, err := net.Dial(network, addr)
 		if err != nil {
@@ -44,10 +45,30 @@ func (p *puller) loop(network, addr string) {
 			continue
 		}
 
+	loop:
 		for {
 			bytecode := make([]byte, 1)
-			if _, err := conn.Read(bytecode); err != nil || bytecode[0] != beginCommand {
+			if _, err := conn.Read(bytecode); err != nil {
 				break
+			}
+
+			switch bytecode[0] {
+			case starttlsCommand:
+				if tlsConfig == nil {
+					break loop
+				}
+				conn = tls.Client(conn, tlsConfig)
+				tlsConfig = nil
+				continue
+
+			case keepaliveCommand:
+				continue
+
+			case beginCommand:
+				// ok
+
+			default:
+				break loop
 			}
 
 			var messageSize uint32

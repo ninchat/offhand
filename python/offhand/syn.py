@@ -7,6 +7,7 @@ __all__ = [
 
 import errno
 import socket
+import ssl
 import struct
 import time
 
@@ -18,6 +19,7 @@ from . import (
 )
 
 from .protocol import (
+    COMMAND_STARTTLS,
     COMMAND_BEGIN,
     COMMAND_COMMIT,
     COMMAND_ROLLBACK,
@@ -85,6 +87,7 @@ class Connection(object):
     def __init__(self, address):
         self.address = address
         self.sock = None
+        self.tls = False
 
     def __str__(self):
         if isinstance(self.address, tuple):
@@ -128,11 +131,18 @@ class Connection(object):
 
         if ok:
             self.sock = sock
+            self.tls = False
         else:
             if sock:
                 sock.close()
 
             raise Reconnect(timedout)
+
+    def start_tls(self):
+        assert not self.tls
+
+        self.sock = ssl.wrap_socket(self.sock)
+        self.tls = True
 
     def send_byte(self, byte):
         assert len(byte) == 1
@@ -222,7 +232,10 @@ def connect_pull(handler, address, stats, connection_type=Connection):
                             command = conn.recv(1, initial=True)
                             occu_stat.trigger()
 
-                            if command == COMMAND_KEEPALIVE:
+                            if command == COMMAND_STARTTLS and not conn.tls:
+                                conn.start_tls()
+                                continue
+                            elif command == COMMAND_KEEPALIVE:
                                 conn.send_byte(REPLY_KEEPALIVE)
                                 continue
                             elif command != COMMAND_BEGIN:

@@ -8,11 +8,13 @@ import (
 const (
 	keepaliveInterval = time.Duration(41.235e9)
 
+	starttlsTimeout  = time.Second * 50
 	beginTimeout     = time.Second * 10
 	commitTimeout    = time.Second * 30
 	rollbackTimeout  = time.Second * 70
 	keepaliveTimeout = time.Second * 20
 
+	starttlsCommand  = byte(0)
 	beginCommand     = byte(10)
 	commitCommand    = byte(21)
 	rollbackCommand  = byte(30)

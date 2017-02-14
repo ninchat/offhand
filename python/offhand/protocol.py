@@ -2,6 +2,7 @@ def byte(x):
     return bytes(bytearray([x]))
 
 
+COMMAND_STARTTLS = byte(0)
 COMMAND_BEGIN = byte(10)
 COMMAND_COMMIT = byte(21)
 COMMAND_ROLLBACK = byte(30)
