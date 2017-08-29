@@ -14,8 +14,8 @@ from . import syn
 class Commit(syn.Commit):
 
     def __init__(self):
+        super().__init__()
         self._event = gevent.event.Event()
-        self.closed = False
 
     def engage(self):
         if self.closed:

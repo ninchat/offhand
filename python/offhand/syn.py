@@ -33,7 +33,11 @@ from .protocol import (
 
 class Commit(object):
     """Abstract class, mostly for typing."""
-    engaged = False
+    __slots__ = ()
+
+    def __init__(self):
+        self.engaged = False
+        self.closed = False
 
     def __enter__(self):
         # type: () -> Commit
