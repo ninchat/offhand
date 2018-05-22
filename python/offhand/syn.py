@@ -48,15 +48,15 @@ class Commit(object):
 
     def engage(self):
         # type: () -> None
-        raise NotImplemented()
+        raise NotImplementedError()
 
     def cancel(self):
         # type: () -> None
-        raise NotImplemented()
+        raise NotImplementedError()
 
     def close(self):
         # type: () -> None
-        raise NotImplemented()
+        raise NotImplementedError()
 
 
 class Reconnect(Exception):
