@@ -30,6 +30,10 @@ from .protocol import (
     REPLY_KEEPALIVE,
 )
 
+ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE
+
 
 class Commit(object):
     """Abstract class, mostly for typing."""
@@ -145,7 +149,7 @@ class Connection(object):
     def start_tls(self):
         assert not self.tls
 
-        self.sock = ssl.wrap_socket(self.sock)
+        self.sock = ssl_context.wrap_socket(self.sock)
         self.tls = True
 
     def send_byte(self, byte):
