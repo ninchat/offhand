@@ -192,12 +192,12 @@ class Connection(object):
                 buf = self.sock.recv(size - len(data))
             except socket.timeout as e:
                 if not initial:
-                    log.error("%s: recv: %s", self, e)
+                    log.warning("%s: recv: %s", self, e)
                 timedout = True
             except socket.error as e:
                 if e.errno == errno.EAGAIN:
                     continue
-                log.error("%s: recv: %s", self, e)
+                log.warning("%s: recv: %s", self, e)
                 timedout = (e.errno == errno.ETIMEDOUT)
                 eof = (e.errno == errno.ECONNRESET)
             except Exception:
